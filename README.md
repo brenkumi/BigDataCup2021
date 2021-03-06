@@ -26,7 +26,7 @@ Our code for this project is broken down into the following sub-folders:
 
 ### Data
 
-Contains the outputs of our "Code/1. Data Preparation/Data Preparation.Rmd" file. Most notably, "otters_data_for_modelling.csv", the data set used for all of our model fitting. In addition, fitted values for expected goals are included in this folder.
+Contains the outputs of our "Code/1. Data Preparation/Data Preparation.Rmd" file. Most notably, "otters_data_for_modelling.csv", the data set used for all of our model fitting. Additionally, we include fitted values of expected goals based off of our models in this folder.
 
 
 
