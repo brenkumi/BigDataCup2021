@@ -1,0 +1,265 @@
+---
+output: pdf_document
+---
+
+\centering
+\Huge
+
+**INLA SPDE Model - Pass Transition Models with AR(1) Process for Consecutive Pass Count**
+
+\raggedright
+
+\rule{\textwidth}{1.5pt}
+\small
+
+```{r setup, include = FALSE}
+library(knitr) # For formatting the document
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+```
+
+Summary: This file provides a template for building our spatiotemporal poisson regression model with INLA used in the transition matrix of our Markov Decision Process.
+
+In particular, we are fitting the following transition models:
+
+- Pass to Shot (to run, set to = c("Shot", "Goal") on line 53)
+
+- Pass to Pass (to run, set to = c("Play", "Incomplete Play") on line 53)
+
+- Pass to Turnover (to run, set to = c("Turnover") on line 53)
+
+
+# Load data and packages
+
+Load necessary packages
+
+```{r load packages}
+library(tidyverse) # For various data analysis functions
+
+library(here) # To call or save code/data in certain folders
+
+library(INLA) # To fit model with INLA
+
+source(here::here("Code/2. Functions/Plotting-Functions.R")) # For plotting function
+```
+
+Load data sets
+
+```{r load data}
+otters_data = read_csv(here::here("Data/otters_data_for_modelling.csv"))
+```
+
+# Specify Event Transition
+
+Specify the event transition we wish to model along with the strength state.
+
+```{r parameters}
+to = c("Turnover")
+
+strength = "ES"
+```
+
+
+# Data Preparation
+
+Extract point counts at each xy-coordinate and each consecutive pass count.
+
+```{r pass counts}
+# Add in extra variable for our analysis
+pass_data = otters_data %>%
+  # Nest by entry-to-exit sequence
+  group_by(entry_id) %>%
+  nest() %>%
+  # For each entry-to-exit sequence...
+  mutate(data = map(data, ~.x %>% 
+                      # Create a pass sequence ID to identify plays with consecutive passes
+                      mutate(num = ifelse(!(event %in% c("Play", "Incomplete Play")) & prev_event %in% c("Play", "Incomplete Play"), 1, 0)) %>%
+                      mutate(pass_seq_id = cumsum(num)))) %>%
+  # Unnest
+  unnest() %>%
+  # Nest by each pass subsequence within each entry-to-exit sequence
+  group_by(entry_id, pass_seq_id) %>%
+  nest() %>%
+  # For each pass subsequence...
+  mutate(data = map(data, ~.x %>% 
+                      # Remove non-passes
+                      filter(event %in% c("Play", "Incomplete Play")) %>%
+                      # Create a variable that records the cumulative number of passes in a subsequence
+                      mutate(num2 = 1) %>%
+                      mutate(pass_count = cumsum(num2)))) %>%
+  # Unnest
+  unnest() %>% ungroup() %>%
+  # If there are more than 5 passes, label it as 5
+  mutate(pass_count = ifelse(pass_count >= 4, 4, pass_count))
+
+# Filter for passes necessary for our analysis
+pass_data_filtered = pass_data %>%
+  # Filter for specified strength plays
+  filter(entry_strength == strength) %>%
+  # Filter for pass to shot transitions
+  filter(next_event %in% to) %>%
+  ungroup() %>%
+  # Remove passes beyond the OZ
+  filter(same_direction_x2 >= 125)
+
+# Create a table containing all available x and y values along with their event counts in each group
+pass_data_table = pass_data_filtered %>%
+  # Select xy-coordinates and time since entry (grouped)
+  select(same_direction_x2, same_direction_y2, pass_count) %>%
+  # Convert factors to numeric values
+  mutate_all(as.character) %>%
+  mutate_all(as.numeric) %>%
+  # Convert data frame to a table of counts for each possible combination of xy-coordinates and pass_count
+  table() %>%
+  as.data.frame() %>%
+  # Rename variables
+  dplyr::rename(x_coord = same_direction_x2, y_coord = same_direction_y2, y = Freq)
+```
+
+Create data frames that capture the offensive zone boundary and all points in the OZ as well as a model matrix that includes all possible combinations of x coordinates, y coordinates and pass count (1-4), along with the frequency of event occurrences in each bin.
+
+```{r model matrix}
+# Set the OZ boundary
+oz_boundary = data.frame(
+  x = c(125, 200, 200, 125, 125),
+  y = c(0, 0, 85, 85, 0)
+)
+
+# Select all values in the OZ
+oz_full = data.frame(x_coord = rep(seq(125,200), 86), y_coord = rep(0:85, each = 76))
+
+
+# Replicate the oz_full data frame 4 times
+model_matrix = do.call("rbind", replicate(4, oz_full, simplify = FALSE)) %>%
+  # For each replicate, add in the corresponding entry time bin number (1-4)
+  mutate(pass_count = rep(1:4, each = 76*86)) %>%
+  # Merge in the frequencies
+  merge(pass_data_table, by = c("x_coord", "y_coord", "pass_count"), all = TRUE) %>%
+  # Replace NAs with 0s
+  mutate(y = ifelse(y %in% NA, 0, y))
+```
+
+
+# Building the INLA SPDE Mesh
+
+```{r mesh}
+# Set the domain and coordinates to be used in our mesh
+model_domain = as.matrix(oz_boundary)
+model_coords = as.matrix(model_matrix[1:2])
+
+# Create the mesh
+Mesh = inla.mesh.2d(model_coords, loc.domain = model_domain, max.edge = c(20, 15), offset = c(1,2), cutoff = 8)
+
+# Plot the mesh along with the data points
+plot(Mesh)
+points(model_coords, col = "blue", pch = 4)
+
+# Save the mesh for future use
+saveRDS(Mesh, here::here("Models/Meshes/Pass_Transition_Mesh.Rda"))
+```
+
+
+# Set Model Specifications
+
+Set a prior and create a weight matrix and index for our model.
+
+```{r spatial effect}
+# Create a spatial weight matrix
+model_A_matrix = inla.spde.make.A(Mesh, loc = model_coords,
+                                  group = model_matrix$pass_count,
+                                  n.group = 4)
+
+# Set the PC Matern prior
+model_spde = inla.spde2.pcmatern(mesh = Mesh, prior.range = c(10, 0.8), prior.sigma = c(0.5, 0.5))
+
+# Create spatial weight index
+model_w_index = inla.spde.make.index("w", n.spde = model_spde$n.spde, n.group = 4)
+```
+
+Create a stack of all information to include in the model.
+
+```{r stack}
+# Initialize the stack
+model_stack = inla.stack(
+  
+  # Add our response variable
+  data = list(y = model_matrix$y), 
+  
+  # Add a list of the weights on the effects
+  A = list(1, model_A_matrix),
+  
+  # Add spatial effects
+  effects = list(
+    
+    # Intercept, repeat 1 n times
+    Intercept = rep(1, nrow(model_matrix)),
+    
+    # Add spatial effect
+    model_w_index
+    
+  ))
+```
+
+Set the model formula
+
+```{r formula}
+model_formula = as.formula(paste0("y ~ -1 + Intercept + f(w, model = model_spde, group = w.group, control.group = list(model = 'ar1'))"))
+```
+
+# Model Results
+
+Run our model
+
+```{r model}
+model = inla(model_formula,
+             
+             family = "poisson",
+             
+             data = inla.stack.data(model_stack),
+             
+             control.compute = list(dic = TRUE, config = TRUE),
+             
+             control.predictor = list(A = inla.stack.A(model_stack)),
+             
+             num.threads = 8
+)
+```
+
+Evaluate our model
+
+```{r viz}
+# Visualize the spatial effects with a spatial heatmap
+model_map = gg_OZ(model, Mesh, Groups = 4, family = "poisson",
+                  GroupLabels = c("1st Pass", "2nd Consecutive Pass", 
+                                  "3rd Consecutive Pass", "4th+ Consecutive Pass")) + 
+  labs(title = paste("Play to", to[1], strength, "Entry Time AR(1) INLA Spatial Map", sep = " "))
+
+# Save the spatial map
+ggsave(filename = paste("Play to", to[1], strength, "AR(1) INLA Spatial Map.png", sep = " "), plot = model_map, device = "png", path = here::here(paste("Figures/Pass/", sep = "")))
+
+# Print a model summary
+summary(model)
+```
+
+Save our results
+
+```{r save}
+# Save the model
+saveRDS(model, file = here::here("Models/Pass", paste("Play_to", to[1], strength, "model.Rda", sep = "_")))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,234 @@
+---
+output: pdf_document
+---
+
+\centering
+\Huge
+
+**INLA SPDE Model - xG Sample Model Based off Events of Shots**
+
+\raggedright
+
+\rule{\textwidth}{1.5pt}
+\small
+
+```{r setup, include = FALSE}
+library(knitr) # For formatting the document
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+```
+
+Summary: This file provides a template for building our spatiotemporal logistic regression model with INLA to determine the expected goals of a given shot that was NOT preceded by a pass.
+
+
+# Load data and packages
+
+Load necessary packages
+
+```{r load packages}
+library(tidyverse) # For various data analysis functions
+
+library(here) # To call or save code/data in certain folders
+
+library(INLA) # To fit model with INLA
+
+source(here::here("Code/2. Functions/Plotting-Functions.R")) # For ggField2 function
+```
+
+Load data set
+
+```{r load data}
+samples = readRDS(here::here("Data/all_samples_so_far2.Rda")) %>%
+  filter(prev_event %in% c("Shot", "Play", "Incomplete Play", "Zone Entry", "Turnover", "Recovery"))
+```
+
+
+# Data Preparation
+
+Create additional variables including a binary variable to identify goals (our response variable), a count of the total shots in a sequence, as well as decaying time functions for time since last shot and time since last entry.
+
+```{r data prep}
+
+otters_data = read_csv(here::here("Data/otters_data_for_modelling.csv")) %>%
+  filter(entry_strength == "ES") %>%
+  mutate(time_since_entry.x = time_since_entry) %>%
+  filter(event != "Zone Entry")
+
+samples = samples %>%
+  mutate(xG_0 = ifelse(Expected_Goals == 0, 1, 0)) %>%
+  bind_rows(otters_data) %>%
+  mutate(last_minute = ifelse(seconds > 1140, 1, 0)) %>%
+  mutate(time_last_minute = ifelse(last_minute == 1, abs(seconds - 1200), 0)) %>%
+  mutate(is_lead = ifelse(score_effect == "Lead", 1, 0)) %>%
+  mutate(is_deficit = ifelse(score_effect == "Deficit", 1, 0)) %>%
+  mutate(shot_time_decay = case_when(
+    # 0 seconds since last shot --> 1
+    time_since_last_shot.x == 0 ~ 1,
+    # 1-9 seconds since last shot --> 1 - log10(seconds)
+    time_since_last_shot.x < 10 ~ 1 - log10(time_since_last_shot.x),
+    # 10+ seconds since last shot --> 0
+    time_since_last_shot.x >= 10 ~ 0,
+    TRUE ~ 0
+  )) %>%
+  mutate(is_pass = ifelse(prev_event %in% c("Play", "Incomplete Play"), 1, 0)) %>%
+  mutate(is_shot = ifelse(prev_event %in% "Shot", 1, 0)) %>%
+  mutate(is_turnover = ifelse(prev_event %in% "Turnover", 1, 0)) %>%
+  mutate(is_recovery = ifelse(prev_event %in% "Recovery", 1, 0)) %>%
+  mutate(is_behind_net = ifelse(same_direction_x > 189, 1, 0))
+```
+
+
+# Create Meshes
+
+Build the spatial shot mesh.
+
+```{r shot mesh}
+oz_boundary = data.frame(
+  x = c(125, 200, 200, 125, 125),
+  y = c(0, 0, 85, 85, 0)
+)
+
+
+model_domain = as.matrix(oz_boundary)
+model_coords = as.matrix(samples %>% select(same_direction_x, same_direction_y))
+
+# Create the mesh
+Mesh = inla.mesh.2d(model_coords, loc.domain = model_domain, max.edge = c(15, 12), offset = c(1,2), cutoff = 8)
+
+# Plot the mesh along with the data points
+plot(Mesh)
+points(model_coords, col = "blue", pch = 4)
+
+# Save the mesh
+#saveRDS(Mesh, here::here(paste("Models/Meshes/Shot_to_Goal_no_pass", strength, "Shot_Mesh.Rda", sep = "_")))
+```
+
+Build the temporal mesh for time since the zone entry occurred.
+
+```{r time mesh}
+# Set the knots
+knots = c(0, 2, 5, 10, max(samples$time_since_entry.x))
+
+# Create 1D mesh
+time_Mesh <- inla.mesh.1d(loc = knots)
+
+# Save the mesh
+#saveRDS(time_Mesh, here::here(paste("Models/Meshes/Shot_to_Goal_no_pass", strength, "Time_Mesh.Rda", sep = "_")))
+```
+
+
+
+# Model Specifications
+
+Set a prior and create a weight matrix and index for the spatial effect in our model.
+
+```{r spatial shot}
+# Create a weight matrix based on our spatial and temporal meshes
+model_A_matrix = inla.spde.make.A(Mesh, loc = model_coords, n.group = length(knots), group = samples$time_since_entry.x, group.mesh = time_Mesh)
+
+# Set the PC Matern prior
+model_spde = inla.spde2.pcmatern(mesh = Mesh, prior.range = c(40, 0.8), prior.sigma = c(0.5, 0.5))
+
+# Create the weight index
+model_w_index = inla.spde.make.index("w", n.spde = model_spde$n.spde, n.group = length(knots))
+```
+
+Create our model matrix.
+
+```{r model matrix}
+X = samples %>%
+  # Select necessary columns to be used in model
+  select(is_deficit, is_lead, shot_time_decay, shot_count, time_last_minute, last_minute, 
+         is_pass, is_shot, is_turnover, is_recovery, pass_count, is_behind_net)
+```
+
+Create a stack of all information to include in the model.
+
+```{r stack}
+# Initialize the stack
+model_stack = inla.stack(
+  
+  # Add our response variable
+  data = list(y = samples$xG_0), 
+  
+  # Add a list of the weights on the effects
+  A = list(1, 1, model_A_matrix),
+  
+  # Add spatial effects
+  effects = list(
+    
+    # Intercept, repeat 1 n times
+    Intercept = rep(1, nrow(samples)),
+    
+    # Add our model matrix
+    X = X,
+    
+    # Add spatial effect
+    model_w_index
+    
+  ))
+```
+
+State our model formula.
+
+```{r formula}
+model_formula = as.formula(paste0("y ~ -1 + Intercept ", 
+                                  " + shot_time_decay:is_shot + shot_count + is_lead + is_deficit + time_last_minute + last_minute",
+                                  " + pass_count:is_pass + is_behind_net",
+                                  " + is_pass + is_shot + is_recovery + is_turnover",
+                                  " + f(w, model = model_spde, group = w.group, control.group = list(model = 'ar1'))"))
+```
+
+
+# Model Results
+
+Run the model
+
+```{r model}
+model = inla(model_formula, 
+             
+             family = "binomial",
+             
+             data = inla.stack.data(model_stack),
+             
+             control.compute = list(dic = TRUE, config = TRUE),
+             
+             control.predictor = list(A = inla.stack.A(model_stack)),
+             
+             num.threads = 8
+)
+```
+
+Evaluate the model
+
+```{r viz}
+# Create the spatial map
+model_map = gg_OZ(model, Mesh, Groups = 5, family = "binomial",
+                  GroupLabels = c("0 Seconds Since Entry", "2 Seconds Since Entry", 
+                                  "5 Seconds Since Entry", "10 Seconds Since Entry",
+                                  ">10 Seconds Since Entry"))
+
+# Print a model summary
+summary(model)
+```
+
+Save our results
+
+```{r save}
+inz_binom_model = model
+saveRDS(inz_binom_model, file = here::here("Models/Value/In_Zone_Binomial_Model.Rda"))
+```
+
+```{r}
+fitted_values_binom = inz_binom_model$summary.fitted.values[1:nrow(samples),]
+
+fitted_df_binom = cbind(samples, fitted_values_binom) %>%
+  filter(is.na(xG_0)) %>%
+  mutate(mean = exp(mean) / (1+ exp(mean))) %>%
+  arrange(event_id)
+
+
+
+```
+
+

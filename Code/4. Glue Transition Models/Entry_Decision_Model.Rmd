@@ -1,0 +1,194 @@
+---
+output: pdf_document
+---
+
+\centering
+\Huge
+
+**INLA SPDE Model - Entry Decision Model 1D**
+
+\raggedright
+
+\rule{\textwidth}{1.5pt}
+\small
+
+```{r setup, include = FALSE}
+library(knitr) # For formatting the document
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+```
+
+Summary: This file provides a template for determining the probability of a player opting for a control entry (carried or passed) upon entering the zone (vs dumping it in). Our model here uses logistic regression via INLA with a 1D spatial effect along the blue line.
+
+
+# Load data and packages
+
+Load necessary packages
+
+```{r load packages}
+library(tidyverse) # For various data analysis functions
+
+library(here) # To call or save code/data in certain folders
+
+library(INLA) # To fit model with INLA
+
+source(here::here("Code/2. Functions/Plotting-Functions.R")) # For ggField2 function
+```
+
+Load data sets
+
+```{r load data}
+otters_data = read_csv(here::here("Data/otters_data_for_modelling.csv"))
+```
+
+# Specify Strength State
+
+Specify which strength state we wish to run the model in
+
+```{r parameters}
+strength = "ES" # "PP" or "ES"
+```
+
+
+# Data Preparation
+
+Filter our data down to what we wish to analyze (zone entries at the specified strength state).
+
+```{r data prep}
+# Filter down to our desired data
+entry_data = otters_data %>%
+  # Only zone entries
+  filter(event == "Zone Entry") %>%
+  # Only at the specified strength state
+  filter(entry_strength == strength) %>%
+  # Add in a binary variable for controlled (1) or dumped (0) that we will use as our response
+  mutate(control = ifelse(detail_1 %in% c("Carried", "Played"), 1, 0))
+
+# Extract a vector of y-coordinates from the model
+model_coords = entry_data$same_direction_y
+```
+
+
+# Create Meshes
+
+Create the 1D mesh as all possible coordinates along the blue line.
+
+```{r mesh}
+Mesh = inla.mesh.1d(0:85)
+```
+
+
+# Model Specifications
+
+Set a prior and create an A matrix and w index for our model.
+
+```{r spatial effect}
+# Create a weight matrix
+model_A_matrix = inla.mesh.1d.A(Mesh, loc = model_coords)
+
+# Set the PC Matern prior
+model_spde = inla.spde2.pcmatern(mesh = Mesh, prior.range = c(3, 0.8), prior.sigma = c(0.5, 0.5))
+
+# Create spatial weight index
+model_w_index = inla.spde.make.index("i", n.spde = model_spde$n.spde)
+```
+
+Create our model matrix of covariates (just score state and period).
+
+```{r model matrix}
+X = entry_data %>% select(offensive_score_diff, period)
+```
+
+Create a stack of all information to include in the model.
+
+```{r stack}
+model_stack = inla.stack(
+  
+  # Add our response
+  data = list(y = entry_data$control), 
+  
+  # Add a list of the weights on the effects
+  A = list(1, 1, model_A_matrix),
+  
+  # Add in effects
+  effects = list(
+    
+    # Intercept, repeat 1 n times
+    Intercept = rep(1, nrow(entry_data)),
+    
+    # Model matrix
+    X = X,
+    
+    # Spatial effect
+    model_w_index
+  ))
+```
+
+Model formula
+
+```{r formula}
+# Create the formula
+model_formula = as.formula(paste0("y ~ -1 + Intercept + ", 
+                                  " + period*offensive_score_diff",
+                                  " + f(i, model = model_spde)"))
+```
+
+
+# Model Results
+
+Run the model
+
+```{r model}
+model = inla(model_formula,
+             
+             family = "binomial",
+             
+             data = inla.stack.data(model_stack),
+             
+             control.compute = list(dic = TRUE, config = TRUE),
+             
+             control.predictor = list(A = inla.stack.A(model_stack)),
+             
+             num.threads = 8
+)
+```
+
+Evaluate our model
+
+```{r viz}
+# Extract fitted values
+fitval = model$summary.fitted.values[1:nrow(entry_data),] %>%
+  mutate(y = entry_data$same_direction_y) %>%
+  mutate(score_effect = entry_data$offensive_score_diff)
+
+# Plot the mean probability of entry along the blue line
+entry_1d = ggplot(fitval) +
+  geom_point(aes(x = y, y = mean), alpha = 0.3) +
+  labs(title = "1D Representation of Dump In to Recovery") +
+  geom_smooth(aes(x = y, y = mean), colour = "green", size = 3) +
+  labs(title = paste("Control Probability vs Location", strength, sep = " "), y = "Probability of Controlled Entry", x = "Rink Width")
+
+# Plot the difference in entry probability for various score effects
+entry_score_effect = ggplot(fitval) +
+  geom_point(aes(x = score_effect, y = mean), alpha = 0.3) +
+  labs(title = "1D Representation of Dump In to Recovery") +
+  geom_smooth(aes(x = score_effect, y = mean), colour = "green", size = 3) +
+  labs(title = "Control Prob vs Score Effect")
+
+# Save the spatial map
+ggsave(filename = paste("Entry Decision", strength, "1D INLA Mesh.png", sep = " "), plot = entry_1d, 
+       device = "png", path = here::here("Figures/Entry/"))
+
+# Print a model summary
+summary(model)
+```
+
+Save our results
+
+```{r save}
+# Save the model
+saveRDS(model, file = here::here("Models/Entry", paste("Entry_Decision", strength, "model.Rda", sep = "_")))
+```
+
+
+

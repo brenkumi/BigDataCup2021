@@ -1,0 +1,283 @@
+---
+output: pdf_document
+---
+
+\centering
+\Huge
+
+**INLA SPDE Model - Shot to Goal Probability Model without Pre-Shot Pass**
+
+\raggedright
+
+\rule{\textwidth}{1.5pt}
+\small
+
+```{r setup, include = FALSE}
+library(knitr) # For formatting the document
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+```
+
+Summary: This file provides a template for building our spatiotemporal logistic regression model with INLA to determine the expected goals of a given shot that was NOT preceded by a pass.
+
+
+# Load data and packages
+
+Load necessary packages
+
+```{r load packages}
+library(tidyverse) # For various data analysis functions
+
+library(here) # To call or save code/data in certain folders
+
+library(INLA) # To fit model with INLA
+
+source(here::here("Code/2. Functions/Plotting-Functions.R")) # For ggField2 function
+```
+
+Load data set
+
+```{r load data}
+otters_data = read_csv(here::here("Data/otters_data_for_modelling.csv"))
+```
+
+
+# Specify Strength State
+
+Specify which strength state we wish to run the model in.
+
+```{r parameters}
+strength = "ES"
+```
+
+
+# Data Preparation
+
+Create additional variables including a binary variable to identify goals (our response variable), a count of the total shots in a sequence, as well as decaying time functions for time since last shot and time since last entry.
+
+```{r data prep}
+# Trim data and create additional variables
+shot_data = otters_data %>%
+  # Filter for shots
+  filter(event %in% c("Shot", "Goal")) %>%
+  # Nest by entry-to-exit sequence
+  group_by(entry_id) %>%
+  nest() %>%
+  # For each entry-to-exit sequence...
+  mutate(data = map(data, ~.x %>% 
+                      # Create a shot count variable to tally the cumulative number of shots in a play
+                      mutate(num = 1) %>%
+                      mutate(shot_count = cumsum(num)) %>%
+                      # Determine the time since the last shot
+                      mutate(last_shot_time = c_seconds - lag(c_seconds)) %>%
+                      # Mark first shots
+                      mutate(is_first_shot = ifelse(shot_count == 1, 1, 0)))) %>%
+  # Unnest
+  unnest() %>% ungroup() %>%
+  # Create a decaying time function for time since the entry
+  mutate(entry_time_decay = case_when(
+    # 0 seconds since entry --> 1
+    time_since_entry == 0 ~ 1,
+    # 1-9 seconds since entry --> 1 - log10(seconds)
+    time_since_entry < 10 ~ 1 - log10(time_since_entry),
+    # 10+ seconds since entry --> 0
+    time_since_entry >= 10 ~ 0,
+    TRUE ~ 0
+  )) %>%
+  # Create a decaying time function for time since the last shot
+  mutate(shot_time_decay = case_when(
+    # 0 seconds since last shot --> 1
+    last_shot_time == 0 ~ 1,
+    # 1-9 seconds since last shot --> 1 - log10(seconds)
+    last_shot_time < 10 ~ 1 - log10(last_shot_time),
+    # 10+ seconds since last shot --> 0
+    last_shot_time >= 10 ~ 0,
+    TRUE ~ 0
+  )) %>%
+  # Create a binary response variable
+  mutate(is_goal = ifelse(event == "Goal", 1, 0)) %>%
+  # Convert logical variables to 0-1 binaries
+  mutate(detail_3 = as.numeric(detail_3), 
+         detail_4 = as.numeric(detail_4))
+
+# Filter for data matching this transition...
+shot_data = shot_data %>%
+  # ... no pass occurs directly before shot
+  filter(is_prev_event_pass == 0) %>%
+  # ... only our specified strength state
+  filter(entry_strength == strength)
+```
+
+
+# Create Meshes
+
+Build the spatial shot mesh.
+
+```{r shot mesh}
+# Create a coordinate matrix
+locations = shot_data %>% 
+  select(same_direction_x, same_direction_y) %>%
+  mutate_all(as.character) %>%
+  mutate_all(as.numeric) %>%
+  as.matrix()
+
+# Set the boundary for the mesh
+xvals = locations[,1]
+yvals = locations[,2]
+
+xrange = c(125, 189)
+yrange = c(0, 85)
+
+model_domain <- matrix(c(xrange[1], yrange[1],
+                         xrange[2], yrange[1],
+                         xrange[2], yrange[2],
+                         xrange[1], yrange[2],
+                         xrange[1], yrange[1]),
+                       ncol = 2L, byrow = TRUE)
+
+
+# Create the mesh
+Mesh = inla.mesh.2d(locations, loc.domain = model_domain, max.edge = c(20, 15), offset = c(1, 2), cutoff = 8)
+
+
+# Plot the mesh and data points
+plot(Mesh)
+points(locations, col = "blue", pch = 4)
+
+# Save the mesh
+saveRDS(Mesh, here::here(paste("Models/Meshes/Shot_to_Goal_no_pass", strength, "Shot_Mesh.Rda", sep = "_")))
+```
+
+Build the temporal mesh for time since the zone entry occurred.
+
+```{r time mesh}
+# Set the knots
+knots = c(0, 2, 5, 10, max(shot_data$time_since_entry))
+
+# Create 1D mesh
+time_Mesh <- inla.mesh.1d(loc = knots)
+
+# Save the mesh
+saveRDS(time_Mesh, here::here(paste("Models/Meshes/Shot_to_Goal_no_pass", strength, "Time_Mesh.Rda", sep = "_")))
+```
+
+
+
+# Model Specifications
+
+Set a prior and create a weight matrix and index for the spatial effect in our model.
+
+```{r spatial shot}
+# Create a weight matrix based on our spatial and temporal meshes
+model_A_matrix = inla.spde.make.A(Mesh, loc = locations, n.group = length(knots), group = shot_data$time_since_entry, group.mesh = time_Mesh)
+
+# Set the PC Matern prior
+model_spde = inla.spde2.pcmatern(mesh = Mesh, prior.range = c(20, 0.8), prior.sigma = c(0.5, 0.5))
+
+# Create the weight index
+model_w_index = inla.spde.make.index("w", n.spde = model_spde$n.spde, n.group = length(knots))
+```
+
+Create our model matrix.
+
+```{r model matrix}
+X = shot_data %>%
+  # Select necessary columns to be used in model
+  select(offensive_score_diff, offensive_strength_diff, period, shot_time_decay, shot_count,
+         detail_3, is_first_shot, is_prev_event_pass, time_since_entry)
+```
+
+Create a stack of all information to include in the model.
+
+```{r stack}
+# Initialize the stack
+model_stack = inla.stack(
+  
+  # Add our response variable
+  data = list(y = shot_data$is_goal), 
+  
+  # Add a list of the weights on the effects
+  A = list(1, 1, model_A_matrix),
+  
+  # Add spatial effects
+  effects = list(
+    
+    # Intercept, repeat 1 n times
+    Intercept = rep(1, nrow(shot_data)),
+    
+    # Add our model matrix
+    X = X,
+    
+    # Add spatial effect
+    model_w_index
+    
+  ))
+```
+
+State our model formula.
+
+```{r formula}
+model_formula = as.formula(paste0("y ~ -1 + Intercept ", 
+                                  " + shot_time_decay + shot_count + detail_3",
+                                  " + f(w, model = model_spde, group = w.group, control.group = list(model = 'ar1'))"))
+```
+
+
+# Model Results
+
+Run the model
+
+```{r model}
+model = inla(model_formula, 
+             
+             family = "binomial",
+             
+             data = inla.stack.data(model_stack),
+             
+             control.compute = list(dic = TRUE, config = TRUE),
+             
+             control.predictor = list(A = inla.stack.A(model_stack)),
+             
+             num.threads = 8
+)
+```
+
+Evaluate the model
+
+```{r viz}
+# Create the spatial map
+model_map_shot = gg_OZ(model, Mesh, Groups = 5, family = "binomial",
+                  GroupLabels = c("0 Seconds Since Entry", "2 Seconds Since Entry", 
+                                  "5 Seconds Since Entry", "10 Seconds Since Entry",
+                                  ">10 Seconds Since Entry")) +
+  labs(title = paste("Shot to Goal without Pre-Shot Movement ", strength, " AR(1) INLA Spatial Map", sep = ""))
+
+# Save the spatial maps
+ggsave(filename = paste("Shot to Goal without Pre-Shot Pass ", strength, " AR(1) INLA Spatial Map.png", sep = ""), 
+       plot = model_map_shot, device = "png", path = here::here("Figures/Shot/"))
+
+# Print a model summary
+summary(model)
+```
+
+Save our results
+
+```{r save}
+# Save the model
+saveRDS(model, file = here::here("Models/Shot/", paste("Shot_to_Goal", strength, "no_pass_model.Rda", sep = "_")))
+```
+
+Extract and save fitted expected goals values from the model.
+
+```{r}
+# Get xG fitted values
+xG_fitted = model$summary.fitted.values[1:nrow(shot_data),]
+
+# Combine with the observed shot data
+shot_data = cbind(shot_data, xG_fitted)
+
+# Save as a csv
+write.csv(shot_data, here::here("Data/no_pass_xG.csv"), row.names = FALSE)
+```
+
+

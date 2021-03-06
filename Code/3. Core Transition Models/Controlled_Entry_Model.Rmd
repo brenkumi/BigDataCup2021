@@ -1,0 +1,219 @@
+---
+output: pdf_document
+---
+
+\centering
+\Huge
+
+**INLA SPDE Model - Controlled Entry Transition Model 1D**
+
+\raggedright
+
+\rule{\textwidth}{1.5pt}
+\small
+
+```{r setup, include = FALSE}
+library(knitr) # For formatting the document
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+```
+
+Summary: This file provides a template for building our spatiotemporal poisson regression model with INLA used in the transition matrix of our Markov Decision Process.
+
+In particular, we are fitting the following transition models:
+
+- Controlled Entry to Pass (to run, set to = c("Play", "Incomplete Play") on line 58)
+
+- Controlled Entry to Shot (to run, set to = c("Shot", "Goal") on line 58)
+
+- Controlled Entry to Turnover (to run, set to = c("Turnover") on line 58)
+
+
+# Load data and packages
+
+Load necessary packages
+
+```{r load packages}
+library(tidyverse) # For various data analysis functions
+
+library(here) # To call or save code/data in certain folders
+
+library(INLA) # To fit model with INLA
+
+source(here::here("Code/2. Functions/Plotting-Functions.R")) # For ggField2 function
+```
+
+Load data set
+
+```{r load data}
+otters_data = read_csv(here::here("Data/otters_data_for_modelling.csv"))
+```
+
+
+# Specify Event Transition
+
+Specify the event transition we wish to model along with the strength state.
+
+```{r parameters}
+to = c("Turnover")
+
+strength = "ES"  # "PP" or "ES"
+```
+
+# Data Preparation
+
+Prepare our model matrix.
+
+```{r data prep}
+# Narrow down to plays that meet our specifications
+otters_data_filtered = otters_data %>%
+  # Select our desired start and end plays
+  filter(event == "Zone Entry" & detail_1 != "Dumped" & next_event %in% to) %>%
+  # Select our desired strength state
+  filter(strength_state == strength)
+
+
+# Create a table containing all available y-coordinate values along with their event counts in each group
+otters_data_table = otters_data_filtered %>%
+  # Select xy-coordinates and time since entry (grouped)
+  select(same_direction_y) %>%
+  # Convert factors to numeric values
+  mutate_all(as.character) %>%
+  mutate_all(as.numeric) %>%
+  # Convert data frame to a table of counts for each possible combination of xy-coordinates and entry_time_group
+  table() %>%
+  as.data.frame()
+
+# Convert the column names to "y_coord" and "y" (our response)
+colnames(otters_data_table) = c("y_coord", "y")
+
+
+# Some values are still missing, create a table with all possible y-coordinates we can enter
+model_matrix = data.frame(y_coord = rep(0:85)) %>%
+  # Merge in the counts from otters_data_table
+  merge(model_matrix, by = c("y_coord"), all = TRUE) %>%
+  # Replace NAs with 0s
+  mutate(y = ifelse(y %in% NA, 0, y))
+
+
+# Create a matrix of all y-coordinates to be used in the creation of our mesh
+model_coords = model_matrix %>%
+  # Select just xy-coordinates
+  select(y_coord) %>%
+  mutate_all(as.character) %>%
+  mutate_all(as.numeric) %>%
+  # Convert to a vector
+  unlist()
+```
+
+
+# Building the INLA SPDE Mesh
+
+Create a mesh
+
+```{r mesh}
+Mesh = inla.mesh.1d(model_coords)
+```
+
+# Set Model Specifications
+
+Set a prior and create a weight matrix and index for our model.
+
+```{r spatial effect}
+# Create an A matrix (sparse matrix representing each triangle)
+model_A_matrix = inla.mesh.1d.A(Mesh, loc = model_coords)
+
+# Set the PC Matern prior
+model_spde = inla.spde2.pcmatern(mesh = Mesh, prior.range = c(50, 0.6), prior.sigma = c(0.5, 0.5))
+
+# Create w index
+model_w_index = inla.spde.make.index("i", n.spde = model_spde$n.spde)
+```
+
+Create a stack of all information to include in the model.
+
+```{r stack}
+# Initialize the stack
+model_stack = inla.stack(
+  
+  # Add our response variable
+  data = list(y = model_matrix$y), 
+  
+  # Add a list of the weights on the effects
+  A = list(1, 1, model_A_matrix),
+  
+  # Add the effects
+  effects = list(
+    
+    # Intercept, repeat 1 n times
+    Intercept = rep(1, nrow(model_matrix)),
+    
+    # Create a variable called is_near_boards to help us deal with discontinuity at the boards
+    X = data.frame(is_near_boards = c(rep(1,10), rep(0,66), rep(1,10))),
+    
+    # Our 1D spatial effect
+    model_w_index
+    
+  ))
+```
+
+Set the model formula
+
+```{r formula}
+model_formula = as.formula(paste0("y ~ -1 + Intercept ", 
+                                  " + is_near_boards",
+                                  " + f(i, model = model_spde)"))
+```
+
+# Model Results
+
+Run our model
+
+```{r model}
+model = inla(model_formula,
+             
+             family = "poisson",
+             
+             data = inla.stack.data(model_stack),
+             
+             control.compute = list(dic = TRUE, config = TRUE),
+             
+             control.predictor = list(A = inla.stack.A(model_stack)),
+             
+             num.threads = 8
+)
+```
+
+Evaluate our model
+
+```{r viz}
+# Extract fitted values
+fitval = model$summary.fitted.values[1:86,] %>%
+  mutate(x = 0:85)
+
+# Plot entry means
+entry_1d = ggplot(fitval) +
+  geom_line(aes(x = x, y = mean)) +
+  labs(title = paste("Controlled Entry to", to[1], strength, "1D INLA Mesh", sep = " "))
+
+# Save the spatial map
+ggsave(filename = paste("Controlled Entry to", to[1], strength, "1D INLA Mesh.png", sep = " "), plot = entry_1d, 
+       device = "png", path = here::here("Figures/Entry/"))
+
+# Print a model summary
+summary(model)
+```
+
+Save our results
+
+```{r save}
+# Save the model
+saveRDS(model, file = here::here("Models/Entry", paste("Controlled_Entry_to", to[1], strength, "model.Rda", sep = "_")))
+```
+
+
+
+
+
+
+
