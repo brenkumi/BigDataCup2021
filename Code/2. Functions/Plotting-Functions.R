@@ -181,19 +181,19 @@ gg_OZ = function (Model,
   # Convert to logistic regression response
   if (family == "binomial") {
     Full.Projection = Full.Projection %>% 
-      mutate(value = value %>% as.character() %>% as.numeric() %>% logit())
+      mutate(value = value %>% as.character() %>% as.numeric())
   }
   
   # Convert to poisson regression response
   if (family == "poisson") {
     Full.Projection = Full.Projection %>% 
-      mutate(value = value %>% as.character() %>% as.numeric() %>% exp())
+      mutate(value = value %>% as.character() %>% as.numeric())
   }
   
   # Calculate fill value
-  Full.Projection$Fill <- cut(Full.Projection$value, breaks = quantile(Full.Projection$value, 
-                                                                        0:9/9, na.rm = T), labels = c(round(quantile(Full.Projection$value, 
-                                                                                                                    0:9/9, na.rm = T), 2)[1:9]), include.lowest = T)
+  Full.Projection$Fill <- cut(Full.Projection$value, breaks = quantile(Full.Projection$value, 0:9/9, na.rm = T), 
+                              labels = c(round(quantile(Full.Projection$value, 0:9/9, na.rm = T), 2)[1:9]), include.lowest = T)
+  
   # Remove NAs
   Full.Projection <- na.omit(Full.Projection)
   
@@ -204,7 +204,7 @@ gg_OZ = function (Model,
   FieldPlot <- ggplot(Full.Projection, aes(x, y)) +
     geom_tile(colour = NA, aes(fill = Fill)) + 
     coord_fixed() + 
-    labs(fill = "Mean", x = NULL, y = NULL) + 
+    labs(fill = "Spatial Covariates on \nLinear Predictor Scale", x = NULL, y = NULL) + 
     guides(fill = guide_legend(reverse = TRUE)) +
     scale_x_continuous(expand = c(0, 0), limits = c(125, 200))+
     scale_y_continuous(expand = c(0, 0), limits = c(0, 85)) +
@@ -215,14 +215,14 @@ gg_OZ = function (Model,
   if (family == "poisson") {
     FieldPlot <- FieldPlot +
       scale_fill_viridis_d() +
-      labs(fill = "Mean Count")
+      labs(fill = "Spatial Covariates on \nLinear Predictor Scale")
   }
   
   # Set custom specs for logistic regression outputs (shot to goal)
   if (family == "binomial") {
     FieldPlot <- FieldPlot +
       scale_fill_viridis_d(option = "magma") +
-      labs(fill = "Mean xG")
+      labs(fill = "Spatial Covariates on \nLinear Predictor Scale")
   }
     
   if (Groups > 1) {
@@ -321,19 +321,18 @@ gg_NZ = function (Model,
   # Convert to logistic regression response
   if (family == "binomial") {
     Full.Projection = Full.Projection %>% 
-      mutate(value = value %>% as.character() %>% as.numeric() %>% logit())
+      mutate(value = value %>% as.character() %>% as.numeric())
   }
   
   # Convert to poisson regression response
   if (family == "poisson") {
     Full.Projection = Full.Projection %>% 
-      mutate(value = value %>% as.character() %>% as.numeric() %>% exp())
+      mutate(value = value %>% as.character() %>% as.numeric())
   }
   
   # Calculate fill value
-  Full.Projection$Fill <- cut(Full.Projection$value, breaks = quantile(Full.Projection$value, 
-                                                                       0:9/9, na.rm = T), labels = c(round(quantile(Full.Projection$value, 
-                                                                                                                    0:9/9, na.rm = T), 2)[1:9]), include.lowest = T)
+  Full.Projection$Fill <- cut(Full.Projection$value, breaks = quantile(Full.Projection$value, 0:9/9, na.rm = T), 
+                              labels = c(round(quantile(Full.Projection$value, 0:9/9, na.rm = T), 2)[1:9]), include.lowest = T)
   # Remove NAs
   Full.Projection <- na.omit(Full.Projection)
   
@@ -344,7 +343,7 @@ gg_NZ = function (Model,
   FieldPlot <- ggplot(Full.Projection, aes(x, y)) +
     geom_tile(colour = NA, aes(fill = Fill)) + 
     coord_fixed() + 
-    labs(fill = "Mean", x = NULL, y = NULL) + 
+    labs(fill = "Spatial Covariates on \nLinear Predictor Scale", x = NULL, y = NULL) + 
     guides(fill = guide_legend(reverse = TRUE)) +
     #scale_x_continuous(expand = c(0, 0), limits = c(125, 200))+
     scale_y_continuous(expand = c(0, 0), limits = c(0, 85)) +
@@ -355,14 +354,14 @@ gg_NZ = function (Model,
   if (family == "poisson") {
     FieldPlot <- FieldPlot +
       scale_fill_viridis_d() +
-      labs(fill = "Mean Count")
+      labs(fill = "Spatial Covariates on \nLinear Predictor Scale")
   }
   
   # Set custom specs for logistic regression outputs (shot to goal)
   if (family == "binomial") {
     FieldPlot <- FieldPlot +
       scale_fill_viridis_d(option = "magma") +
-      labs(fill = "Mean xG")
+      labs(fill = "Spatial Covariates on \nLinear Predictor Scale")
   }
   
   if (Groups > 1) {

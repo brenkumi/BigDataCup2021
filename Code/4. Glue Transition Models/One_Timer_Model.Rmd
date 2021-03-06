@@ -262,10 +262,10 @@ model_map_pass = gg_OZ(model, pass_Mesh, Mat_Name = "g", Groups = 4, family = "b
 
 # Save the spatial maps
 ggsave(filename = paste("One-Timer ", strength, " AR(1) INLA Spatial Map.png", sep = ""), 
-       plot = model_map_shot, device = "png", path = here::here("Figures/Miscellaneous/"))
+       plot = model_map_shot, device = "png", path = here::here("Figures/Glue Models/"))
 
 ggsave(filename = paste("Pass Before One-Timer ", strength, " AR(1) INLA Spatial Map.png", sep = ""), 
-       plot = model_map_pass, device = "png", path = here::here("Figures/Miscellaneous/"))
+       plot = model_map_pass, device = "png", path = here::here("Figures/Glue Models/"))
 
 # Print a model summary
 summary(model)
@@ -274,7 +274,7 @@ summary(model)
 Save our results
 
 ```{r save}
-saveRDS(model, here::here(paste("Models/Miscellaneous/One_Timer", strength, "model.Rda", sep = "_")))
+saveRDS(model, here::here(paste("Models/Glue Models/One_Timer", strength, "model.Rda", sep = "_")))
 ```
 
 

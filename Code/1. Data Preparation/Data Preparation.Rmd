@@ -28,6 +28,8 @@ Load necessary packages
 ```{r load packages}
 library(tidyverse) # For various data analysis functions
 
+library(furrr) # For parallelizing nested data computation
+
 library(here) # To call or save code/data in certain folders
 
 library(reshape2) # For the melt() and dcast() functions
@@ -43,6 +45,13 @@ Load data sets
 
 ```{r load data}
 otters_data = read_csv("https://raw.githubusercontent.com/bigdatacup/Big-Data-Cup-2021/main/hackathon_scouting.csv")
+```
+
+Parallelize code
+
+```{r parallel}
+# plan(multicore) # Uncomment if you are on a Mac to run code in parallel
+# plan(multisession) # Uncomment if you are on a Windows to run code in parallel
 ```
 
 # Extracting Plays Meeting Model Specifications (Zone Entry to End of Possession)
@@ -77,7 +86,7 @@ otters_data_clean_v2 = otters_data_clean_v1 %>%
   group_by(episode_id) %>%
   nest() %>%
   # For each episode...
-  mutate(data = map(data, ~.x %>% 
+  mutate(data = future_map(data, ~.x %>% 
                       # Create a binary variable to mark zone entries
                       mutate(entry = ifelse(Event == "Zone Entry", 1, 0)) %>%
                       # Create an entry count to associate each play with an entry
@@ -96,7 +105,7 @@ otters_data_clean_v3 = otters_data_clean_v2 %>%
   group_by(entry_id) %>%
   nest() %>%
   # For each entry-to-entry play...
-  mutate(data = map(data, ~.x %>%
+  mutate(data = future_map(data, ~.x %>%
                       # Label the offensive team
                       mutate(entry_team = .x %>% filter(entry == 1) %>% select(Team) %>% unlist()) %>%
                       # Determine the entry time
@@ -147,7 +156,7 @@ write.csv(otters_data_clean_v6, here::here("Data/otters_entry_data.csv"), row.na
 
 # Adding in Latent Movement for Visualization
 
-For visualization purposes, we can add in "latent movements" between each observed play. This takes a while to run (roughly 8 minutes for me), but upon completion we can use ggplot
+For visualization purposes, we can add in "latent movements" between each observed play. 
 
 ```{r latent carries}
 ## ADD IN LATENT MOVEMENTS TO THE DATA ##
@@ -156,7 +165,7 @@ otters_latent_movement = otters_data_clean_v6 %>%
   group_by(entry_id) %>%
   nest() %>%
   # Add in an additional row between each event
-  mutate(data = map(data, ~.x %>%
+  mutate(data = future_map(data, ~.x %>%
                       # Use rownames as an index column and group by this index
                       rownames_to_column("event_id") %>%
                       group_by(event_id) %>%
@@ -167,7 +176,7 @@ otters_latent_movement = otters_data_clean_v6 %>%
                       # Ungroup the data
                       ungroup())) %>%
   # Add in the xy-coordinates for the latent movements
-  mutate(data = map(data, ~.x %>%
+  mutate(data = future_map(data, ~.x %>%
                       # Add in x-coordinates for the latent movements
                       mutate(same_direction_x = case_when(
                         # If the previous event was a pass and the current event is latent, then the x-coordinate is the previous end x-coordinate
@@ -243,7 +252,7 @@ otters_data_clean_v8 = otters_data_clean_v7 %>%
   group_by(entry_id) %>%
   nest() %>%
   # For each entry-to-exit play...
-  mutate(data = map(data, ~.x %>% 
+  mutate(data = future_map(data, ~.x %>% 
                       # Mark where there are changes in possession
                       mutate(poss_change = ifelse(Team != lag(Team), 1, 0)) %>%
                       # Label NAs as 0's
@@ -279,7 +288,7 @@ otters_data_clean_v10 = otters_data_clean_v9 %>%
     # Isn't on offence and has >1 consecutive events...
     on_offence == 0 & length > 1 ~
       # Remove all but the first and last play
-      map(data, ~rbind(head(.x, 1), tail(.x, 1)) %>%
+      future_map(data, ~rbind(head(.x, 1), tail(.x, 1)) %>%
             # Relabel first plays after puck acquisition by defensive team as turnovers
             mutate(Event = ifelse(Event %in% c("Play", "Incomplete Play", "Recovery"), "Turnover", Event)) %>%
             # Label last events as exits (except last events before the whistle, since those might not be exits)
@@ -287,7 +296,7 @@ otters_data_clean_v10 = otters_data_clean_v9 %>%
     # Isn't on offence and has a single event...
     on_offence == 0 & length == 1 ~
       # Remove all but the first and last play
-      map(data, ~.x %>%
+      future_map(data, ~.x %>%
             # Relabel first plays after puck acquisition by defensive team as turnovers
             mutate(Event = ifelse(Event %in% c("Play", "Incomplete Play", "Recovery"), "Turnover", Event)) %>%
             # Label last events as exits (except last events before the whistle, since those might not be exits)

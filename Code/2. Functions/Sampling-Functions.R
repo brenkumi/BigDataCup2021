@@ -1041,3 +1041,4 @@ expected_goals_no_pass <- function(n_samples, shot_x, shot_y, detail_3, time_sin
   
   out
 }
+

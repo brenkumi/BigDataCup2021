@@ -194,7 +194,8 @@ fitval = model$summary.fitted.values[1:86,] %>%
 # Plot entry means
 entry_1d = ggplot(fitval) +
   geom_line(aes(x = x, y = mean)) +
-  labs(title = paste("Controlled Entry to", to[1], strength, "1D INLA Mesh", sep = " "))
+  labs(title = paste("Controlled Entry to", to[1], strength, "1D INLA Mesh", sep = " "),
+       x = "Location Along Blue Line", y = "Mean Count")
 
 # Save the spatial map
 ggsave(filename = paste("Controlled Entry to", to[1], strength, "1D INLA Mesh.png", sep = " "), plot = entry_1d, 
