@@ -55,7 +55,7 @@ otters_data = read_csv(here::here("Data/otters_data_for_modelling.csv"))
 Specify the event transition we wish to model along with the strength state.
 
 ```{r parameters}
-to = c("Turnover")
+to = c("Play")
 
 strength = "ES"  # "PP" or "ES"
 ```
@@ -91,7 +91,7 @@ colnames(otters_data_table) = c("y_coord", "y")
 # Some values are still missing, create a table with all possible y-coordinates we can enter
 model_matrix = data.frame(y_coord = rep(0:85)) %>%
   # Merge in the counts from otters_data_table
-  merge(model_matrix, by = c("y_coord"), all = TRUE) %>%
+  merge(otters_data_table, by = c("y_coord"), all = TRUE) %>%
   # Replace NAs with 0s
   mutate(y = ifelse(y %in% NA, 0, y))
 
