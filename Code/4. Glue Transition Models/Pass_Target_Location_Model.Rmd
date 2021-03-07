@@ -254,7 +254,7 @@ model_map_y = gg_OZ(model_y, Mesh, Mat_Name = "w", Groups = 5,
 
 # Save the spatial maps
 ggsave(filename = paste("Pass Target Y-Location ", strength, " IID INLA Spatial Map.png", sep = ""), 
-       plot = model_map_y, device = "png", path = here::here("Figures/Miscellaneous/"))
+       plot = model_map_y, device = "png", path = here::here("Figures/Glue Models/"))
 
 # Print a model summary
 summary(model)
@@ -263,6 +263,6 @@ summary(model)
 Save our results
 
 ```{r save}
-saveRDS(model_y, here::here(paste("Models/Miscellaneous/Pass_Y_Location", strength, "model.Rda", sep = "_")))
+saveRDS(model_y, here::here(paste("Models/Glue Models/Pass_Y_Location", strength, "model.Rda", sep = "_")))
 ```
 

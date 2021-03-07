@@ -130,13 +130,11 @@ entry_decision = readRDS("Models/Entry/Entry_Decision_ES_model.Rda")
 
 ## X-LOCATION MODEL ##
 x_prediction = readRDS("Models/Glue Models/X_Location_ES_model.Rda")
-x_prediction = readRDS("Models/Glue Models/Predict_x_loc_ES_2.Rda")
-x_prediction_mesh = readRDS("Models/Meshes/XY_Location_Prediction_ES_Mesh.Rda")
-x_prediction_mesh = readRDS("Models/Meshes/Mesh_x_y_prediction.Rda")
+x_prediction_mesh = readRDS("Models/Meshes/Mesh_x_y_ES_prediction.Rda")
 
 ## Y-LOCATION MODEL ##
-y_prediction = readRDS("Models/Glue Models/Predict_y_loc_ES_2.Rda")
-y_prediction_mesh = readRDS("Models/Meshes/Mesh_x_y_prediction.Rda")
+y_prediction = readRDS("Models/Glue Models/Y_Location_ES_model.Rda")
+y_prediction_mesh = readRDS("Models/Meshes/Mesh_x_y_ES_prediction.Rda")
 
 ## TIME-TO-EVENT MODEL ##
 time_to_event = readRDS("Models/Glue Models/Time_to_Event_ES_model.Rda")
@@ -742,7 +740,7 @@ x_goal_sample <- function(n_samples, x_loc, y_loc, prev_transition, n_passes_pre
     
     # Tally other transitions
     
-    data.frame(event_id = event_id, observation = mm, Expected_Goals = xg, x_loc = x_loc, y_loc = y_loc, prev_transition = prev_transition, transition = transition,
+    data.frame(event_id = event_id, observation = mm, xPV = xg, x_loc = x_loc, y_loc = y_loc, prev_transition = prev_transition, transition = transition,
                time_in_period = time_in_period, time_since_last_shot = time_since_last_shot, time_since_entry = time_since_entry,
                entry = entry, shots = shots, passes = passes, recoveries = recoveries, turnovers = turnovers) %>%
       mutate(sequence = map(.x = observation, ~sequence))

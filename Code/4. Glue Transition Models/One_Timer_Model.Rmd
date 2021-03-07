@@ -253,7 +253,7 @@ Evaluate the model
 model_map_shot = gg_OZ(model, Mesh, Mat_Name = "w", Groups = 4, family = "binomial",
                   GroupLabels = c("14 Seconds Since Entry", "27 Seconds Since Entry", 
                                   "33 Seconds Since Entry", "58 Seconds Since Entry")) +
-  labs(title = paste("One-Timer ", strength, " AR(1) INLA Spatial Map", sep = ""))
+  labs(title = paste("Probability a Shot with a Pre-Shot Pass is a One-Timer ", strength, " AR(1) INLA Spatial Map", sep = ""))
 
 model_map_pass = gg_OZ(model, pass_Mesh, Mat_Name = "g", Groups = 4, family = "binomial",
                        GroupLabels = c("0 Seconds Before Shot", "1 Second Before Shot", 
