@@ -1,0 +1,327 @@
+---
+output: pdf_document
+---
+
+\centering
+\Huge
+
+**INLA SPDE Model - XY-Location Prediction Model**
+
+\raggedright
+
+\rule{\textwidth}{1.5pt}
+\small
+
+```{r setup, include = FALSE}
+library(knitr) # For formatting the document
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+```
+
+Summary: This file provides a template for building our spatiotemporal regression model with INLA used in the simulations of our model. Here we are predicting the next xy-coordinates following an event.
+
+
+# Load data and packages
+
+Load necessary packages
+
+```{r load packages}
+library(tidyverse) # For various data analysis functions
+
+library(here) # To call or save code/data in certain folders
+
+library(INLA) # To fit model with INLA
+
+source(here::here("Code/0. Functions/Plotting-Functions.R")) # For ggField2 function
+```
+
+Load data set
+
+```{r load data}
+otters_data = read_csv(here::here("Data/otters_data_for_modelling.csv"))
+```
+
+# Specify Strength State
+
+Specify which strength state we wish to run the model in
+
+```{r parameters}
+strength = "ES" # "PP" or "ES"
+```
+
+
+# Data Preparation
+
+Filter down to the data we wish to build the model with (shots that are preceded by a pass).
+
+```{r data prep}
+# Add necessary variables
+otters_data = otters_data %>%
+  # Filter for strength state
+  filter(entry_strength == strength) %>%
+  # Create binary variables for previous events
+  mutate(prev_pass = ifelse(prev_event %in% c("Pass", "Failed Pass"), 1, 0)) %>%
+  mutate(prev_shot = ifelse(prev_event == "Shot", 1, 0)) %>%
+  mutate(prev_recovery = ifelse(prev_event == "Recovery", 1, 0)) %>%
+  mutate(prev_turnover = ifelse(prev_event == "Turnover", 1, 0)) %>%
+  mutate(prev_zone_entry = ifelse(prev_event == "Zone Entry", 1, 0)) %>%
+  # Create binary for direct passes
+  mutate(direct_pass = case_when(
+    is.na(detail_1) ~ 0,
+    detail_1 == "Direct" ~ 1,
+    TRUE ~ 0
+  )) %>%
+  # Nest by entry-to-exit sequence
+  group_by(entry_id) %>%
+  nest() %>%
+  # For each entry-to-exit sequence...
+  mutate(data = map(data, ~.x %>% 
+                      mutate(prev_x = lag(same_direction_x)) %>%
+                      mutate(prev_y = lag(same_direction_y)))) %>%
+  # Unnest
+  unnest() %>% ungroup() %>%
+  # Determine if the previous event came from the left side
+  mutate(prev_left_side = ifelse(prev_y > 42.5, 1, 0)) %>%
+  # Determine if the previous event came from behind the net
+  mutate(prev_behind_net = ifelse(prev_x >= 189, 1, 0)) %>%
+  # Get z-scored x-coordinate
+  mutate(x_normalized = scale(same_direction_x)) %>%
+  # Create interaction term between x_normalized and right side of ice
+  mutate(x_normalized_int_right = x_normalized * (1 - prev_left_side)) %>%
+  # Filter for events with previous events (no zone entries)
+  filter(!is.na(prev_event)) %>%
+  # Relabel pass events to direct and indirect
+  mutate(event2 = case_when(
+    event %in% c("Pass", "Failed Pass") & detail_1 == "Direct" ~ "Direct",
+    event %in% c("Pass", "Failed Pass") & detail_1 == "Indirect" ~ "Indirect",
+    event == "Goal" ~ "Shot",
+    TRUE ~ event
+  )) %>%
+  # Assign each event type a numeric value
+  mutate(type_index = plyr::mapvalues(event2, from = c("Turnover","Recovery", "Shot", "Direct", "Indirect"), to = 1:5) %>% 
+           as.numeric())
+
+# Get order of events
+events = otters_data %>% select(event2) %>% unlist() %>% unique()
+```
+
+
+# Create Meshes
+
+Build the spatial event mesh.
+
+```{r shot mesh}
+# Create the boundary for OZ mesh
+oz_boundary = data.frame(
+  x = c(125, 200, 200, 125, 125),
+  y = c(0, 0, 85, 85, 0)
+)
+
+model_domain = as.matrix(oz_boundary)
+
+
+# Get model coordinates and matrix
+model_coords = as.matrix(otters_data %>% select(prev_x, prev_y))
+model_matrix = otters_data %>% select(prev_x, prev_y, type_index)
+
+
+# Build INLA SPDE mesh
+Mesh = inla.mesh.2d(model_coords, max.edge = c(20, 15), offset = c(1, 2), cutoff = 8, loc.domain = model_domain)
+
+
+# Plot the mesh and data points
+plot(Mesh)
+points(locations, col = "blue", pch = 4)
+
+
+# Save the mesh
+saveRDS(Mesh, here::here(paste("Models/Meshes/Mesh_x_y", strength, "prediction.Rda", sep = "_")))
+```
+
+
+# Model Specifications
+
+Set a prior and create a weight matrix and index for the spatial effect in our model.
+
+```{r spatial shot}
+# Create a spatial weight matrix for shot locations
+model_A_matrix = inla.spde.make.A(Mesh, loc = model_coords, n.group = 5, group = otters_data$type_index)
+
+# Set the PC Matern prior
+model_spde = inla.spde2.pcmatern(mesh = Mesh, prior.range = c(20, 0.2), prior.sigma = c(0.5, 0.5))
+
+# Create shot spatial weight index
+model_w_index = inla.spde.make.index("w", n.spde = model_spde$n.spde, n.group = 5)
+```
+
+
+Create a matrix of all covariates used in the model
+
+```{r model matrix}
+X = otters_data %>%
+  select(direct_pass, prev_behind_net, prev_pass, prev_shot, prev_recovery, prev_turnover, 
+         prev_zone_entry, time_since_entry, x_normalized, x_normalized_int_right)
+```
+
+
+# X-Location Model
+
+Create a stack of all information to include in the model.
+
+```{r stack}
+# Initialize the stack
+model_stack_x = inla.stack(
+  
+  # Add our response variable
+  data = list(y = otters_data$same_direction_x), 
+  
+  # Add a list of the weights on the effects
+  A = list(1, 1, model_A_matrix),
+  
+  # Add spatial effects
+  effects = list(
+    
+    # Intercept, repeat 1 n times
+    Intercept = rep(1, nrow(otters_data)),
+    
+    # Add our model matrix
+    X = X,
+    
+    # Add shot spatial effect
+    model_w_index
+    
+  ))
+```
+
+State our model formula.
+
+```{r formula}
+model_formula_x = as.formula(paste0("y ~ -1 + Intercept ", 
+                                    " + direct_pass + prev_behind_net + time_since_entry",
+                                    " + prev_pass + prev_recovery + prev_shot + prev_zone_entry",
+                                    " + f(w, model = model_spde, group = w.group, control.group = list(model = 'iid'))"))
+```
+
+
+Run the model
+
+```{r model}
+model_x = inla(model_formula_x,
+             
+             family = "gaussian",
+             
+             data = inla.stack.data(model_stack_x),
+             
+             control.compute = list(dic = TRUE, waic = TRUE, config = TRUE),
+             
+             control.predictor = list(A = inla.stack.A(model_stack_x)),
+             
+             num.threads = 16
+)
+```
+
+
+Evaluate the model
+
+```{r viz}
+# Create the spatial maps
+model_map_x = gg_OZ(model_x, Mesh, Mat_Name = "w", Groups = 5, 
+                    GroupLabels = events) +
+  labs(title = paste("X-Location ", strength, " IID INLA Spatial Map", sep = "")) +
+  scale_fill_viridis_d()
+
+# Save the spatial maps
+ggsave(filename = paste("X-Location ", strength, " IID INLA Spatial Map.png", sep = ""), 
+       plot = model_map_x, device = "png", path = here::here("Figures/Other/"))
+
+# Print a model summary
+summary(model_x)
+```
+
+Save our results
+
+```{r save}
+saveRDS(model_x, here::here(paste("Models/Other/X_Location", strength, "model.Rda", sep = "_")))
+```
+
+
+# Y-Location Model (Dependent on X)
+
+Create a stack of all information to include in the model.
+
+```{r stack}
+# Initialize the stack
+model_stack_y = inla.stack(
+  
+  # Add our response variable
+  data = list(y = otters_data$same_direction_y), 
+  
+  # Add a list of the weights on the effects
+  A = list(1, 1, model_A_matrix),
+  
+  # Add spatial effects
+  effects = list(
+    
+    # Intercept, repeat 1 n times
+    Intercept = rep(1, nrow(otters_data)),
+    
+    # Add our model matrix
+    X = X,
+    
+    # Add shot spatial effect
+    model_w_index
+    
+  ))
+```
+
+State our model formula.
+
+```{r formula}
+model_formula_y = as.formula(paste0("y ~ -1 + Intercept ", 
+                                    " + prev_behind_net + time_since_entry + x_normalized + x_normalized_int_right",
+                                    " + prev_pass + prev_recovery + prev_shot + prev_zone_entry",
+                                    " + f(w, model = model_spde, group = w.group, control.group = list(model = 'iid'))"))
+```
+
+
+Run the model
+
+```{r model}
+model_y = inla(model_formula_y,
+             
+             family = "gaussian",
+             
+             data = inla.stack.data(model_stack_y),
+             
+             control.compute = list(dic = TRUE, waic = TRUE, config = TRUE),
+             
+             control.predictor = list(A = inla.stack.A(model_stack_y)),
+             
+             num.threads = 16
+)
+```
+
+
+Evaluate the model
+
+```{r viz}
+# Create the spatial maps
+model_map_y = gg_OZ(model_y, Mesh, Mat_Name = "w", Groups = 5,
+                    GroupLabels = events) +
+  labs(title = paste("Y-Location ", strength, " IID INLA Spatial Map", sep = "")) +
+  scale_fill_viridis_d()
+
+# Save the spatial maps
+ggsave(filename = paste("Y-Location ", strength, " IID INLA Spatial Map.png", sep = ""), 
+       plot = model_map_y, device = "png", path = here::here("Figures/Other/"))
+
+# Print a model summary
+summary(model_y)
+```
+
+Save our results
+
+```{r save}
+saveRDS(model_y, here::here(paste("Models/Other/Y_Location", strength, "model.Rda", sep = "_")))
+```
+

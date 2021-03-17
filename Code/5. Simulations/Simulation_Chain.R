@@ -15,160 +15,107 @@ library(INLA) # To run various INLA functions
 
 library(tidyverse) # For various data manipulation functions
 
-source("Code/2. Functions/Sampling-Functions.R")
+source("Code/0. Functions/Sampling-Functions.R")
 
 
 
-#####################
-#### LOAD MODELS ####
-#####################
+####################################
+#### LOAD MESHES AND PARAMETERS ####
+####################################
 
 setwd(here::here())
 
-#########################
-### TRANSITION MODELS ###
-
-## CONTROLLED ENTRIES ##
-
-# ...to Shot
-controlled_2_shot = readRDS("Models/Entry/Controlled_Entry_to_Shot_ES_model.Rda")
-
-# ...to Pass
-controlled_2_play = readRDS("Models/Entry/Controlled_Entry_to_Play_ES_model.Rda")
-
-# ...to Turnover
-controlled_2_turnover = readRDS("Models/Entry/Controlled_Entry_to_Turnover_ES_model.Rda")
-
+########################
+### INLA SPDE MESHES ###
 
 ## DUMP-IN ENTRIES ##
+dump_mesh = readRDS("Models/Meshes/Dump_In_Entry_Mesh.Rda")
 
-# ...to Recovery
-dumped_2_recovery = readRDS("Models/Entry/Dump_to_Recovery_ES_model.Rda")
-dumped_2_recovery_mesh = readRDS("Models/Meshes/Dump_In_Entry_Mesh.Rda")
-
-# ...to Turnover
-dumped_2_turnover = readRDS("Models/Entry/Dump_to_Turnover_ES_model.Rda")
-dumped_2_turnover_mesh = readRDS("Models/Meshes/Dump_In_Entry_Mesh.Rda")
-
-## PASSES ##
-
-# ...to Pass
-play_2_play = readRDS("Models/Pass/Play_to_Play_ES_model.Rda")
-play_2_play_mesh = readRDS("Models/Meshes/Pass_Transition_Mesh.Rda")
-
-# ...to Shot
-play_2_shot = readRDS("Models/Pass/Play_to_Shot_ES_model.Rda")
-play_2_shot_mesh = readRDS("Models/Meshes/Pass_Transition_Mesh.Rda")
-
-# ...to Turnover
-play_2_turnover = readRDS("Models/Pass/Play_to_Turnover_ES_model.Rda")
-play_2_turnover_mesh = readRDS("Models/Meshes/Pass_Transition_Mesh.Rda")
-
+## PASSES, FAILED PASSES, RECOVERIES, AND TURNOVERS ##
+rtp_mesh = readRDS("Models/Meshes/Recov_Turn_Pass_Mesh.Rda")
 
 ## SHOTS ##
-
-# ...to Recovery
-shot_2_recovery = readRDS("Models/Shot/Shot_to_Recovery_ES_model.Rda")
-shot_2_recovery_mesh = readRDS("Models/Meshes/Shot_Transition_Mesh.Rda")
-
-# ...to Turnover
-shot_2_turnover = readRDS("Models/Shot/Shot_to_Turnover_ES_model.Rda")
-shot_2_turnover_mesh = readRDS("Models/Meshes/Shot_Transition_Mesh.Rda")
-
-# ...to Whistle
-shot_2_whistle = readRDS("Models/Shot/Shot_to_Whistle_ES_model.Rda")
-shot_2_whistle_mesh = readRDS("Models/Meshes/Shot_Transition_Mesh.Rda")
-
-
-## RECOVERIES ##
-
-# ...to Pass
-recovery_2_play = readRDS("Models/Recovery/Recovery_to_Play_ES_model.Rda")
-recovery_2_play_mesh = readRDS("Models/Meshes/Recov_Turnover_Transition_Mesh.Rda")
-
-# ...to Shot
-recovery_2_shot = readRDS("Models/Recovery/Recovery_to_Shot_ES_model.Rda")
-recovery_2_shot_mesh = readRDS("Models/Meshes/Recov_Turnover_Transition_Mesh.Rda")
-
-# ...to Turnover
-recovery_2_turnover = readRDS("Models/Recovery/Recovery_to_Turnover_ES_model.Rda")
-recovery_2_turnover_mesh = readRDS("Models/Meshes/Recov_Turnover_Transition_Mesh.Rda")
-
-
-## TURNOVERS ##
-
-# ...to Recovery
-turnover_2_recovery = readRDS("Models/Turnover/Turnover_to_Recovery_ES_model.Rda")
-turnover_2_recovery_mesh = readRDS("Models/Meshes/Recov_Turnover_Transition_Mesh.Rda")
-
-# ...to Exit
-turnover_2_exit = readRDS("Models/Turnover/Turnover_to_Exit_ES_model.Rda")
-turnover_2_exit_mesh = readRDS("Models/Meshes/Recov_Turnover_Transition_Mesh.Rda")
-
-
-
-####################
-### VALUE MODELS ###
-
-## SHOT TO GOAL WITH PASS ##
-shot_2_goal_with_pass = readRDS("Models/Shot/Shot_to_Goal_ES_with_pass_model.Rda")
+shot_trans_mesh = readRDS("Models/Meshes/Shot_Transition_Mesh.Rda")
 shot_2_goal_wp_shot_mesh = readRDS("Models/Meshes/Shot_to_Goal_with_pass_ES_Shot_Mesh.Rda")
 shot_2_goal_wp_pass_mesh = readRDS("Models/Meshes/Shot_to_Goal_with_pass_ES_Pass_Mesh.Rda")
 shot_2_goal_wp_time_mesh = readRDS("Models/Meshes/Shot_to_Goal_with_pass_ES_Time_Mesh.Rda")
-
-## SHOT TO GOAL NO PASS ##
-shot_2_goal_no_pass = readRDS("Models/Shot/Shot_to_Goal_ES_no_pass_model.Rda")
 shot_2_goal_np_shot_mesh = readRDS("Models/Meshes/Shot_to_Goal_no_pass_ES_Shot_Mesh.Rda")
 shot_2_goal_np_time_mesh = readRDS("Models/Meshes/Shot_to_Goal_no_pass_ES_Time_Mesh.Rda")
 
-
-###################
-### GLUE MODELS ###
-
-## ENTRY DECISION ##
-entry_decision = readRDS("Models/Entry/Entry_Decision_ES_model.Rda")
-
-## X-LOCATION MODEL ##
-x_prediction = readRDS("Models/Glue Models/X_Location_ES_model.Rda")
-x_prediction_mesh = readRDS("Models/Meshes/Mesh_x_y_ES_prediction.Rda")
-
-## Y-LOCATION MODEL ##
-y_prediction = readRDS("Models/Glue Models/Y_Location_ES_model.Rda")
-y_prediction_mesh = readRDS("Models/Meshes/Mesh_x_y_ES_prediction.Rda")
-
-## TIME-TO-EVENT MODEL ##
-time_to_event = readRDS("Models/Glue Models/Time_to_Event_ES_model.Rda")
-time_to_event_mesh = readRDS("Models/Meshes/Time_to_Event_ES_Mesh.Rda")
-
-## DIRECT/INDIRECT PASS ##
-direct_pass = readRDS("Models/Glue Models/Direct_Pass_ES_model.Rda")
+## MOVEMENT AND TIME ##
+xy_mesh = readRDS("Models/Meshes/Mesh_x_y_ES_prediction.Rda")
+pass_target_mesh = readRDS("Models/Meshes/Pass_XY_Location_ES_Mesh.Rda")
+time_mesh = readRDS("Models/Meshes/Time_to_Event_ES_Mesh.Rda")
+pass_completion_start_mesh = readRDS("Models/Meshes/Pass_Completion_Start_ES_Mesh.Rda")
+pass_completion_end_mesh = readRDS("Models/Meshes/Pass_Completion_End_ES_Mesh.Rda")
 direct_pass_mesh = readRDS("Models/Meshes/Direct_Pass_ES_Mesh.Rda")
-
-## PASS TARGET ##
-pass_x_target = readRDS("Models/Glue Models/Pass_X_Location_ES_model.Rda")
-pass_y_target = readRDS("Models/Glue Models/Pass_Y_Location_ES_model.Rda")
-pass_target_mesh = readRDS("Models/Meshes/Mesh_pass_target.Rda")
-
-## TRAFFIC WITH PASS ##
-traffic_with_pass = readRDS("Models/Glue Models/Traffic_with_pass_ES_model.Rda")
 traffic_wp_shot_mesh = readRDS("Models/Meshes/Traffic_with_pass_ES_Shot_Mesh.Rda")
 traffic_wp_pass_mesh = readRDS("Models/Meshes/Traffic_with_pass_ES_Pass_Mesh.Rda")
 traffic_wp_time_mesh = readRDS("Models/Meshes/Traffic_with_pass_ES_Time_Mesh.Rda")
-
-## TRAFFIC NO PASS ##
-traffic_no_pass = readRDS("Models/Glue Models/Traffic_no_pass_ES_model.Rda")
 traffic_np_shot_mesh = readRDS("Models/Meshes/Traffic_no_pass_ES_Shot_Mesh.Rda")
 traffic_np_time_mesh = readRDS("Models/Meshes/Traffic_no_pass_ES_Time_Mesh.Rda")
-
-## ONE-TIMER ##
-one_timer = readRDS("Models/Glue Models/One_Timer_ES_model.Rda")
 one_timer_shot_mesh = readRDS("Models/Meshes/One_Timer_ES_Shot_Mesh.Rda")
 one_timer_pass_mesh = readRDS("Models/Meshes/One_Timer_ES_Pass_Mesh.Rda")
 one_timer_time_mesh = readRDS("Models/Meshes/One_Timer_ES_Time_Mesh.Rda")
 one_timer_time_mesh_random = readRDS("Models/Meshes/One_Timer_ES_Time_Mesh_Random.Rda")
 
 
+#########################
+### SAMPLE PARAMETERS ###
+
+## ENTRIES ##
+controlled_2_shot_parameters = readRDS("Sample Parameters/Controlled_Entry_to_Shot_Parameter_Samples.Rda")
+controlled_2_pass_parameters = readRDS("Sample Parameters/Controlled_Entry_to_Pass_Parameter_Samples.Rda")
+controlled_2_turnover_parameters = readRDS("Sample Parameters/Controlled_Entry_to_Turnover_Parameter_Samples.Rda")
+dumped_2_recovery_parameters = readRDS("Sample Parameters/Dump_to_Recovery_Parameter_Samples.Rda")
+dumped_2_turnover_parameters = readRDS("Sample Parameters/Dump_to_Turnover_Parameter_Samples.Rda")
+
+## PASSES ##
+pass_2_pass_parameters = readRDS("Sample Parameters/Pass_to_Pass_Parameter_Samples.Rda")
+pass_2_shot_parameters = readRDS("Sample Parameters/Pass_to_Shot_Parameter_Samples.Rda")
+pass_2_turnover_parameters = readRDS("Sample Parameters/Pass_to_Turnover_Parameter_Samples.Rda")
+failed_pass_2_turnover_parameters = readRDS("Sample Parameters/Failed_Pass_to_Turnover_Parameter_Samples.Rda")
+failed_pass_2_recovery_parameters = readRDS("Sample Parameters/Failed_Pass_to_Recovery_Parameter_Samples.Rda")
+
+## SHOTS ##
+shot_2_recovery_parameters = readRDS("Sample Parameters/Shot_to_Recovery_Parameter_Samples.Rda")
+shot_2_turnover_parameters = readRDS("Sample Parameters/Shot_to_Turnover_Parameter_Samples.Rda")
+shot_2_whistle_parameters = readRDS("Sample Parameters/Shot_to_Whistle_Parameter_Samples.Rda")
+shot_2_goal_wp_parameters = readRDS("Sample Parameters/Shot_to_Goal_with_pass_Parameter_Samples.Rda")
+shot_2_goal_np_parameters = readRDS("Sample Parameters/Shot_to_Goal_no_pass_Parameter_Samples.Rda")
+
+## RECOVERIES ##
+recovery_2_shot_parameters = readRDS("Sample Parameters/Recovery_to_Shot_Parameter_Samples.Rda")
+recovery_2_pass_parameters = readRDS("Sample Parameters/Recovery_to_Pass_Parameter_Samples.Rda")
+recovery_2_turnover_parameters = readRDS("Sample Parameters/Recovery_to_Turnover_Parameter_Samples.Rda")
+
+## TURNOVERS ##
+turnover_2_recovery_parameters = readRDS("Sample Parameters/Turnover_to_Recovery_Parameter_Samples.Rda")
+turnover_2_exit_parameters = readRDS("Sample Parameters/Turnover_to_Exit_Parameter_Samples.Rda")
+
+## MOVEMENT AND TIME ##
+entry_decision_parameters = readRDS("Sample Parameters/Entry_Decision_Parameter_Samples.Rda")
+x_prediction_parameters = readRDS("Sample Parameters/X_Location_Parameter_Samples.Rda")
+y_prediction_parameters = readRDS("Sample Parameters/Y_Location_Parameter_Samples.Rda")
+time_to_event_parameters = readRDS("Sample Parameters/Time_to_Event_Parameter_Samples.Rda")
+direct_pass_parameters = readRDS("Sample Parameters/Direct_Pass_Parameter_Samples.Rda")
+pass_completion_parameters = readRDS("Sample Parameters/Pass_Completion_Parameter_Samples.Rda")
+pass_x_target_parameters = readRDS("Sample Parameters/Pass_X_Location_Parameter_Samples.Rda")
+pass_y_target_parameters = readRDS("Sample Parameters/Pass_Y_Location_Parameter_Samples.Rda")
+one_timer_parameters = readRDS("Sample Parameters/One_Timer_Parameter_Samples.Rda")
+traffic_wp_parameters = readRDS("Sample Parameters/Traffic_with_pass_Parameter_Samples.Rda")
+traffic_np_parameters = readRDS("Sample Parameters/Traffic_no_pass_Parameter_Samples.Rda")
+
+
+
+
+#####################
+### PARALLELIZE R ###
+#####################
+
 ### SET UP SYSTEM TO RUN IN PARALLEL ###
+cores = detectCores()
+
 system <- "Windows" # Change this to Linux or MAC if not on windows
 
 if(system =="Windows"){
@@ -182,11 +129,18 @@ if(system =="Windows"){
   registerDoParallel(cores)
 }
 
-### CREATE THE EXPECTED POSSESSION VALUE SIMULATION ###
+
+
+
+#####################################################
+### EXPECTED POSSESSION VALUE SIMULATION FUNCTION ###
+#####################################################
+
 x_goal_sample <- function(n_samples, x_loc, y_loc, prev_transition, n_passes_prev, n_shots, time_in_period, time_since_entry, 
                           period, offensive_score_difference, before_entry_indicator, time_since_last_shot, xg_samples, event_id){
   
-  source("Code/2. Functions/Sampling-Functions.R")
+  # Load in sampling functions
+  source("Code/0. Functions/Sampling-Functions.R")
   
   # The chain ends when either the period is up (reach 1200 seconds) or a whistle or an exit
   xseq <- c(1:n_samples)
@@ -259,8 +213,7 @@ x_goal_sample <- function(n_samples, x_loc, y_loc, prev_transition, n_passes_pre
       ### ENTRY DECISION ###
       
       # Get a sample probability of entering the zone with control
-      control_prob <- gen_samp_entry_decision(n_samples = 1, y_loc = y_loc, offensive_score_diff = offensive_score_difference, 
-                                              period = period)
+      control_prob <- gen_samp_entry_decision(n_samples = 1, y_loc = y_loc, offensive_score_diff = offensive_score_difference, period = period)
       
       # Using this probability simulate if we enter with control or not
       control_ind <- rbinom(1,1,control_prob)
@@ -277,7 +230,7 @@ x_goal_sample <- function(n_samples, x_loc, y_loc, prev_transition, n_passes_pre
         trans_real <- t(rmultinom(1,1,trans_prob))
         
         # Transition to our next state
-        transition <- c("Shot", "Play","Turnover")[which(trans_real == 1)]
+        transition <- c("Shot", "Pass","Turnover")[which(trans_real == 1)]
         
         # Set controlled entry as the previous event
         prev_transition <- "Controlled Entry"
@@ -296,7 +249,9 @@ x_goal_sample <- function(n_samples, x_loc, y_loc, prev_transition, n_passes_pre
         ### DUMP-IN ENTRY ###
         
         # Determine probabilities of transitioning from dump-in to recovery or turnover
-        trans_prob = dump_transition_probabilites(n_samples = 1, x_loc = x_loc, y_loc = y_loc, prev_event = prev_transition, score_state = score_state)
+        trans_prob = dump_transition_probabilites(n_samples = 1, x_loc = x_loc, y_loc = y_loc, score_state = score_state, 
+                                                  samples_recovery = dumped_2_recovery_parameters, 
+                                                  samples_turnover = dumped_2_turnover_parameters, dump_mesh = dump_mesh)
         
         # Take a multinomial sample to see which we move to
         trans_real <- t(rmultinom(1, 1, trans_prob))
@@ -367,7 +322,7 @@ x_goal_sample <- function(n_samples, x_loc, y_loc, prev_transition, n_passes_pre
         ## EXPECTED GOALS ##
         ####################
         
-        if(prev_transition =="Play"){
+        if(prev_transition =="Pass"){
           
           ## ...WITH PRE-SHOT MOVEMENT ##
           
@@ -431,9 +386,7 @@ x_goal_sample <- function(n_samples, x_loc, y_loc, prev_transition, n_passes_pre
         ########################################
         
         # Determine probabilities of transitioning from shot to recovery, turnover or whistle
-        trans_prob <- shot_transition_probabilities(n_samples = 1, x_loc = x_loc, y_loc = y_loc, time_since_entry = time_since_entry,
-                                                    shot_2_recovery = shot_2_recovery, shot_2_turnover = shot_2_turnover,
-                                                    shot_2_whistle = shot_2_whistle)
+        trans_prob <- shot_transition_probabilities(n_samples = 1, x_loc = x_loc, y_loc = y_loc, time_since_entry = time_since_entry)
         
         # Take a multinomial sample to see which we move to
         trans_real <- t(rmultinom(1, 1, trans_prob))
@@ -464,14 +417,14 @@ x_goal_sample <- function(n_samples, x_loc, y_loc, prev_transition, n_passes_pre
         
       }else{
         
-        if(transition =="Play"){
+        if(transition =="Pass"){
           
           ###########################################
           ############### PASS EVENTS ###############
           ###########################################
           
           # Reset pass count if the previous play wasn't a pass
-          if(prev_transition != "Play") {
+          if(prev_transition != "Pass") {
             n_passes_prev = 0
           }
           
@@ -479,11 +432,9 @@ x_goal_sample <- function(n_samples, x_loc, y_loc, prev_transition, n_passes_pre
           # UPDATE LOCATION AND TIME #
           ############################
           
-          
-          
           # Determine the xy-coordinates where the shot will occur from
           x_loc = rnorm(1, gen_samp_x_location(n_samples = 1, x_loc = x_prev, y_loc = y_prev, prev_transition = prev_transition,
-                                               time_since_entry = time_since_entry,transition = "Play"), 13)
+                                               time_since_entry = time_since_entry,transition = "Pass"), 13)
           
           x_loc = case_when(
             x_loc > 200 ~ 200,
@@ -492,7 +443,7 @@ x_goal_sample <- function(n_samples, x_loc, y_loc, prev_transition, n_passes_pre
           )
           
           y_loc <- rnorm(1,gen_samp_y_location(n_samples = 1, x_prev = x_prev, y_prev = y_prev, x_loc = x_loc, prev_transition = prev_transition, 
-                                               transition = "Play", time_since_entry = time_since_entry),22)
+                                               transition = "Pass", time_since_entry = time_since_entry),22)
           
           y_loc = case_when(
             y_loc > 85 ~ 85,
@@ -501,7 +452,7 @@ x_goal_sample <- function(n_samples, x_loc, y_loc, prev_transition, n_passes_pre
           )
           
           # Determine the time that has lapsed between the last two events
-          time_sample = gen_samp_time(n_samples = 1, x_loc = x_loc, y_loc = y_loc, transition = "Play",
+          time_sample = gen_samp_time(n_samples = 1, x_loc = x_loc, y_loc = y_loc, transition = "Pass",
                                       prev_x_loc = x_prev, prev_y_loc = y_prev, prev_transition = prev_transition)
           time_jump = rpois(1, time_sample)
           
@@ -541,21 +492,52 @@ x_goal_sample <- function(n_samples, x_loc, y_loc, prev_transition, n_passes_pre
             TRUE ~ pass_end_y
           )
           
+          # Determine the time since the last pass (if the pass occurred directly before it)
+          time_since_last_pass = ifelse(prev_transition == "Pass", 100, time_jump)
+          
+          # Determine if the pass is complete
+          completion_prob = gen_samp_pass_completion(n_samples = 1, x_loc = x_loc, y_loc = y_loc, target_x = pass_end_x,
+                                                     target_y = pass_end_y, time_since_last_pass = time_since_last_pass,
+                                                     is_direct = is_direct, pass_count = n_passes_prev)
+          
+          is_complete = rbinom(1, 1, completion_prob)
+          
           
           ########################################
           # DETERMINE NEXT TRANSITION TRANSITION #
           ########################################
           
-          # Determine next event to transition to
-          trans_prob <- pass_transition_probabilities(n_samples = 1, x_loc = pass_end_x, y_loc = pass_end_y, n_passes_prev = n_passes_prev,
-                                                      pass_2_pass = play_2_play, pass_2_shot = play_2_shot, pass_2_turnover = play_2_turnover)
-          
-          # Take a multinomial sample to see which we move to
-          trans_real <- t(rmultinom(1, 1, trans_prob))
-          
-          # Transition to our next state
-          transition <- c("Play", "Shot", "Turnover")[which(trans_real == 1)]
-          
+          if (is_complete == 1) {
+            
+            # Determine next event to transition to
+            trans_prob <- pass_transition_probabilities(n_samples = 1, x_loc = pass_end_x, y_loc = pass_end_y, 
+                                                        time_since_entry = time_since_entry)
+            
+            # Take a multinomial sample to see which we move to
+            trans_real <- t(rmultinom(1, 1, trans_prob))
+            
+            # Transition to our next state
+            transition <- c("Pass", "Shot", "Turnover")[which(trans_real == 1)]
+            
+            # Add pass
+            sequence = append(sequence, "Pass")
+            
+          } else {
+            
+            # Determine next event to transition to
+            trans_prob <- failed_pass_transition_probabilities(n_samples = 1, x_loc = pass_end_x, y_loc = pass_end_y, 
+                                                               time_since_entry = time_since_entry)
+            
+            # Take a multinomial sample to see which we move to
+            trans_real <- t(rmultinom(1, 1, trans_prob))
+            
+            # Transition to our next state
+            transition <- c("Recovery", "Turnover")[which(trans_real == 1)]
+            
+            # Add failed pass
+            sequence = append(sequence, "Failed Pass")
+            
+          }
           
           ######################################
           # UPDATE FUNCTIONS OF TIME AND SPACE #
@@ -569,11 +551,11 @@ x_goal_sample <- function(n_samples, x_loc, y_loc, prev_transition, n_passes_pre
           y_prev = y_loc
           
           # Update previous transition
-          prev_transition = "Play"
+          prev_transition = "Pass"
           
           first_play = 0
           passes = passes + 1
-          sequence = append(sequence, "Play")
+          
           
         }else{
           
@@ -622,8 +604,7 @@ x_goal_sample <- function(n_samples, x_loc, y_loc, prev_transition, n_passes_pre
             ########################################
             
             # Determine next event to transition to
-            trans_prob <- turnover_transition_probabilities(n_samples = 1, x_loc = x_loc, y_loc = y_loc, time_since_entry = time_since_entry,
-                                                            turnover_2_exit = turnover_2_exit, turnover_2_recovery = turnover_2_recovery)
+            trans_prob <- turnover_transition_probabilities(n_samples = 1, x_loc = x_loc, y_loc = y_loc, time_since_entry = time_since_entry)
             
             # Take a multinomial sample to see which we move to
             trans_real <- t(rmultinom(1, 1, trans_prob))
@@ -692,15 +673,13 @@ x_goal_sample <- function(n_samples, x_loc, y_loc, prev_transition, n_passes_pre
             ########################################
             
             # Determine next event to transition to
-            trans_prob <- recovery_transition_probabilities(n_samples = 1, x_loc = x_loc, y_loc = y_loc, time_since_entry = time_since_entry,
-                                                            recovery_2_play = recovery_2_play, recovery_2_shot = recovery_2_shot,
-                                                            recovery_2_turnover = recovery_2_turnover)
+            trans_prob <- recovery_transition_probabilities(n_samples = 1, x_loc = x_loc, y_loc = y_loc, time_since_entry = time_since_entry)
             
             # Take a multinomial sample to see which we move to
             trans_real <- t(rmultinom(1, 1, trans_prob))
             
             # Transition to our next state
-            transition <- c("Play", "Turnover", "Shot")[which(trans_real == 1)]
+            transition <- c("Pass", "Turnover", "Shot")[which(trans_real == 1)]
             
             
             ######################################

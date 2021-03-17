@@ -1,0 +1,313 @@
+---
+output: pdf_document
+---
+
+\centering
+\Huge
+
+**INLA SPDE Model - Pass Completion Model**
+
+\raggedright
+
+\rule{\textwidth}{1.5pt}
+\small
+
+```{r setup, include = FALSE}
+library(knitr) # For formatting the document
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+```
+
+Summary: This file provides a template for building our spatiotemporal logistic regression model with INLA to determine the probability that a pass is completed successfully.
+
+
+# Load data and packages
+
+Load necessary packages
+
+```{r load packages}
+library(tidyverse) # For various data analysis functions
+
+library(here) # To call or save code/data in certain folders
+
+library(INLA) # To fit model with INLA
+
+library(raster, exclude = "select") # For distance calculations
+
+library(LearnGeom) # For angle calculations
+
+source(here::here("Code/0. Functions/Plotting-Functions.R")) # For ggField2 function
+```
+
+Load data set
+
+```{r load data}
+otters_data = read_csv(here::here("Data/otters_data_for_modelling.csv"))
+```
+
+# Specify Strength State
+
+Specify which strength state we wish to run the model in
+
+```{r parameters}
+strength = "ES"
+```
+
+
+# Data Preparation
+
+Filter for necessary data and add in extra features.
+
+```{r data prep}
+# Trim data and create additional variables
+pass_data = otters_data %>%
+  # Filter for passes
+  filter(event %in% c("Pass", "Failed Pass")) %>%
+  # Filter for only specified strength state
+  filter(entry_strength == strength) %>%
+  # Remove a few odd cases without pass target locations
+  filter(!is.na(same_direction_x2)) %>%
+  # Ignore if target is outside offensive zone
+  filter(same_direction_x2 >= 125) %>%
+  # Add variable for passes that come from below goal line
+  mutate(from_behind_net = ifelse(last_pass_x > 189, 1, 0)) %>%
+  # Determine if pass is complete
+  mutate(is_complete = ifelse(event == "Pass",  1, 0)) %>%
+  # Determine if pass is direct or not (1 = direct, 2 = indirect)
+  mutate(is_direct = ifelse(detail_1 == "Direct", 1, 2)) %>%
+  # Did the pass start behind the net?
+  mutate(from_behind_net = ifelse(same_direction_x >= 189, 1, 0))
+
+# Add in extra covariates for pass angle and distance
+pass_data$angle = NA
+pass_data$pass_distance = NA
+
+for (i in 1:nrow(pass_data)) {
+  
+  pass_data$pass_distance[i] = pointDistance(c(pass_data$same_direction_x[i], pass_data$same_direction_y[i]), 
+                                             c(pass_data$same_direction_x2[i], pass_data$same_direction_y2[i]),
+                                             lonlat = FALSE)
+  
+  if (!((pass_data$same_direction_x[i] == pass_data$same_direction_x2[i]) & (pass_data$same_direction_y[i] == pass_data$same_direction_y2[i]))) {
+    pass_data$angle[i] = Angle(A = c(pass_data$same_direction_x[i], 95), 
+                             B = c(pass_data$same_direction_x[i], pass_data$same_direction_y[i]),
+                             C = c(pass_data$same_direction_x2[i], pass_data$same_direction_y2[i]))
+  } else {pass_data$angle[i] = 0}
+  
+  pass_data$angle[i] = case_when(
+    (pass_data$same_direction_x[i] > pass_data$same_direction_x2[i]) & (pass_data$same_direction_y[i] > pass_data$same_direction_y2[i]) ~ abs(pass_data$angle[i] - 180),
+    (pass_data$same_direction_x[i] > pass_data$same_direction_x2[i]) & (pass_data$same_direction_y[i] <= pass_data$same_direction_y2[i]) ~ abs(-pass_data$angle[i]),
+    (pass_data$same_direction_x[i] <= pass_data$same_direction_x2[i]) & (pass_data$same_direction_y[i] > pass_data$same_direction_y2[i]) ~ abs(180 - pass_data$angle[i]),
+    (pass_data$same_direction_x[i] <= pass_data$same_direction_x2[i]) & (pass_data$same_direction_y[i] <= pass_data$same_direction_y2[i]) ~ abs(pass_data$angle[i]),
+    is.nan(pass_data$angle[i]) ~ 0
+  )
+}
+
+# Determine if the pass is moving forwards or backwards
+pass_data = pass_data %>%
+  mutate(is_forwards = ifelse(same_direction_x <= same_direction_x2, 1, 0)) %>%
+  mutate(is_backwards = ifelse(same_direction_x > same_direction_x2, 1, 0))
+```
+
+
+
+# Create Meshes
+
+Build the spatial pass start location mesh.
+
+```{r shot mesh}
+# Create a coordinate matrix
+start_loc = pass_data %>% 
+  select(same_direction_x, same_direction_y) %>%
+  mutate_all(as.numeric) %>%
+  as.matrix()
+
+# Set the boundary for the mesh
+xvals = start_loc[,1]
+yvals = start_loc[,2]
+
+xrange = c(min(xvals), 189)
+yrange = c(min(yvals), 85)
+
+model_domain <- matrix(c(xrange[1], yrange[1],
+                         xrange[2], yrange[1],
+                         xrange[2], yrange[2],
+                         xrange[1], yrange[2],
+                         xrange[1], yrange[1]),
+                       ncol = 2L, byrow = TRUE)
+
+# Create the mesh
+start_Mesh = inla.mesh.2d(start_loc, loc.domain = model_domain, max.edge = c(20, 15), offset = c(1, 2), cutoff = 8)
+
+# Plot the mesh and data points
+plot(start_Mesh)
+points(start_loc, col = "blue", pch = 4)
+
+saveRDS(start_Mesh, here::here(paste("Models/Meshes/Pass_Completion_Start", strength, "Mesh.Rda", sep = "_")))
+```
+
+Build the spatial pass end location mesh.
+
+```{r pass mesh}
+# Create a coordinate matrix
+end_loc = pass_data %>% 
+  select(same_direction_x2, same_direction_y2) %>%
+  mutate_all(as.numeric) %>%
+  as.matrix()
+
+# Set the boundary for the mesh
+pass_x = end_loc[,1]
+pass_y = end_loc[,2]
+
+pass_xrange = c(min(pass_x), 189)
+pass_yrange = c(min(pass_y), 85)
+
+pass_domain <- matrix(c(pass_xrange[1], pass_yrange[1],
+                        pass_xrange[2], pass_yrange[1],
+                        pass_xrange[2], pass_yrange[2],
+                        pass_xrange[1], pass_yrange[2],
+                        pass_xrange[1], pass_yrange[1]),
+                      ncol = 2L, byrow = TRUE)
+
+# Create the mesh
+end_Mesh = inla.mesh.2d(end_loc, loc.domain = pass_domain, max.edge = c(20, 15), offset = c(1, 2), cutoff = 8)
+
+# Plot the mesh
+plot(end_Mesh)
+points(end_loc, col = "red", pch = 4)
+
+saveRDS(end_Mesh, here::here(paste("Models/Meshes/Pass_Completion_End", strength, "Mesh.Rda", sep = "_")))
+```
+
+
+
+
+# Model Specifications
+
+Set a prior and create a weight matrix and index for the pass start spatial effect in our model.
+
+```{r shot spatial}
+# Create a weight matrix
+start_A_matrix = inla.spde.make.A(start_Mesh, loc = start_loc, n.group = 2, group = pass_data$is_direct)
+
+# Set the PC Matern prior
+start_spde = inla.spde2.pcmatern(mesh = start_Mesh, prior.range = c(35, 0.5), prior.sigma = c(0.5, 0.5))
+
+# Create weight index
+start_w_index = inla.spde.make.index("w", n.spde = start_spde$n.spde, n.group = 2)
+```
+
+Set a prior and create a weight matrix and index for the pass end spatial effect in our model.
+
+```{r pass spatial}
+# Create a weight matrix
+end_A_matrix = inla.spde.make.A(end_Mesh, loc = end_loc, n.group = 2, group = pass_data$is_direct)
+
+# Set the PC Matern prior
+end_spde = inla.spde2.pcmatern(mesh = end_Mesh, prior.range = c(40, 0.7), prior.sigma = c(0.5, 0.5))
+
+# Create weight index
+end_w_index = inla.spde.make.index("g", n.spde = end_spde$n.spde, n.group = 2)
+```
+
+Create our model matrix.
+
+```{r model matrix}
+X = pass_data %>%
+  # Select necessary columns
+  select(pass_time_decay, pass_count, pass_distance, 
+         angle, is_forwards, is_backwards, from_behind_net)
+```
+
+Create a stack of all information to include in the model.
+
+```{r stack}
+# Initialize the stack
+model_stack = inla.stack(
+  
+  # Add our response variable
+  data = list(y = pass_data$is_complete), 
+  
+  # Add a list of the weights on the effects
+  A = list(1, 1, start_A_matrix, end_A_matrix),
+  
+  # Add spatial effects
+  effects = list(
+    
+    # Intercept, repeat 1 n times
+    Intercept = rep(1, nrow(pass_data)),
+    
+    # Add our model matrix
+    X = X,
+    
+    # Add pass start spatial effect
+    start_w_index,
+    
+    # Add pass end spatial effect
+    end_w_index
+    
+  ))
+```
+
+State our model formula.
+
+```{r formula}
+model_formula = as.formula(paste0("y ~ -1 + Intercept ", 
+                                  " + pass_time_decay + pass_distance + angle:is_forwards + angle:is_backwards",
+                                  " + pass_count + from_behind_net",
+                                  " + f(w, model = start_spde, group = w.group, control.group = list(model = 'exchangeable'))",
+                                  " + f(g, model = end_spde, group = g.group, control.group = list(model = 'exchangeable'))"))
+```
+
+
+# Model Results
+
+Run the model
+
+```{r model}
+model = inla(model_formula, 
+             
+             family = "binomial",
+             
+             data = inla.stack.data(model_stack),
+             
+             control.compute = list(dic = TRUE, waic = TRUE, config = TRUE),
+             
+             control.predictor = list(A = inla.stack.A(model_stack)),
+             
+             num.threads = 8
+)
+```
+
+Evaluate our model
+
+```{r viz}
+# Create the spatial maps
+model_map_start = gg_OZ(model, start_Mesh, Mat_Name = "w", Groups = 2, family = "binomial",
+                  GroupLabels = c("Direct Pass", "Indirect Pass")) +
+  labs(title = paste("Pass Completion Start ", strength, " AR(1) INLA Spatial Map", sep = ""))
+
+model_map_end = gg_OZ(model, end_Mesh, Mat_Name = "g", Groups = 2, family = "binomial",
+                  GroupLabels = c("Direct Pass", "Indirect Pass")) +
+  labs(title = paste("Pass Completion End ", strength, " AR(1) INLA Spatial Map", sep = ""))
+
+# Save the spatial maps
+ggsave(filename = paste("Pass Completion Start ", strength, " AR(1) INLA Spatial Map.png", sep = ""), 
+       plot = model_map_start, device = "png", path = here::here("Figures/Pass/"))
+
+ggsave(filename = paste("Pass Completion End ", strength, " AR(1) INLA Spatial Map.png", sep = ""), 
+       plot = model_map_end, device = "png", path = here::here("Figures/Pass/"))
+
+# Print a model summary
+summary(model)
+```
+
+Save our results
+
+```{r save}
+# Save the model
+saveRDS(model, file = here::here("Models/Pass/", paste("Pass_Completion", strength, "model.Rda", sep = "_")))
+```
+
+
+

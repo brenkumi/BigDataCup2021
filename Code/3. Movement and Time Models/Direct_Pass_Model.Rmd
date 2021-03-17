@@ -1,0 +1,213 @@
+---
+output: pdf_document
+---
+
+\centering
+\Huge
+
+**INLA SPDE Model - Pass Completion Model**
+
+\raggedright
+
+\rule{\textwidth}{1.5pt}
+\small
+
+```{r setup, include = FALSE}
+library(knitr) # For formatting the document
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+```
+
+Summary: This file provides a template for building our spatiotemporal logistic regression model with INLA to determine the probability that a pass is direct (no bounces/deflections/banks).
+
+
+# Load data and packages
+
+Load necessary packages
+
+```{r load packages}
+library(tidyverse) # For various data analysis functions
+
+library(here) # To call or save code/data in certain folders
+
+library(INLA) # To fit model with INLA
+
+source(here::here("Code/0. Functions/Plotting-Functions.R")) # For ggField2 function
+```
+
+Load data set
+
+```{r load data}
+otters_data = read_csv(here::here("Data/otters_data_for_modelling.csv"))
+```
+
+# Specify Strength State
+
+Specify which strength state we wish to run the model in
+
+```{r parameters}
+strength = "ES"
+```
+
+
+# Data Preparation
+
+Create additional variables including a binary variable to identify goals (our response variable), a count of the total shots in a sequence, as well as decaying time functions for time since last shot and time since last entry. Additionally, calculate pass distance and angle change that will be used as covariates in our model.
+
+```{r data prep}
+# Trim data and create additional variables
+pass_data = otters_data %>%
+  # Filter for passes
+  filter(event %in% c("Pass", "Failed Pass")) %>%
+  # Filter for only specified strength state
+  filter(entry_strength == strength) %>%
+  # Binaries for the previous event
+  mutate(prev_pass = ifelse(prev_event %in% c("Pass"), 1, 0)) %>%
+  mutate(prev_recovery = ifelse(prev_event %in% c("Recovery"), 1, 0)) %>%
+  # Binaries for score state
+  mutate(is_lead = ifelse(score_effect == "Lead", 1, 0)) %>%
+  mutate(is_deficit = ifelse(score_effect == "Deficit", 1, 0)) %>%
+  # Determine if pass is direct or not (1 = direct, 2 = indirect)
+  mutate(is_direct = ifelse(detail_1 == "Direct", 1, 0))
+```
+
+
+
+# Create Meshes
+
+Build the INLA spatial mesh.
+
+```{r shot mesh}
+# Create a coordinate matrix
+locations = pass_data %>% 
+  select(same_direction_x, same_direction_y) %>%
+  mutate_all(as.numeric) %>%
+  as.matrix()
+
+# Set the boundary for the mesh
+xvals = locations[,1]
+yvals = locations[,2]
+
+xrange = c(min(xvals), 189)
+yrange = c(min(yvals), 85)
+
+model_domain <- matrix(c(xrange[1], yrange[1],
+                         xrange[2], yrange[1],
+                         xrange[2], yrange[2],
+                         xrange[1], yrange[2],
+                         xrange[1], yrange[1]),
+                       ncol = 2L, byrow = TRUE)
+
+# Create the mesh
+Mesh = inla.mesh.2d(locations, loc.domain = model_domain, max.edge = c(20, 15), offset = c(1, 2), cutoff = 8)
+
+# Plot the mesh and data points
+plot(Mesh)
+points(locations, col = "blue", pch = 4)
+
+saveRDS(Mesh, here::here(paste("Models/Meshes/Direct_Pass", strength, "Mesh.Rda", sep = "_")))
+```
+
+
+# Model Specifications
+
+Set a prior and create a weight matrix and index for the spatial effect in our model.
+
+```{r shot spatial}
+# Create a weight matrix
+model_A_matrix = inla.spde.make.A(Mesh, loc = locations)
+
+# Set the PC Matern prior
+model_spde = inla.spde2.pcmatern(mesh = Mesh, prior.range = c(35, 0.5), prior.sigma = c(0.5, 0.5))
+
+# Create weight index
+model_w_index = inla.spde.make.index("w", n.spde = model_spde$n.spde)
+```
+
+Create our model matrix.
+
+```{r model matrix}
+X = pass_data %>%
+  # Select necessary columns
+  select(prev_pass, prev_recovery, is_lead, is_deficit)
+```
+
+Create a stack of all information to include in the model.
+
+```{r stack}
+# Initialize the stack
+model_stack = inla.stack(
+  
+  # Add our response variable
+  data = list(y = pass_data$is_direct), 
+  
+  # Add a list of the weights on the effects
+  A = list(1, 1, model_A_matrix),
+  
+  # Add spatial effects
+  effects = list(
+    
+    # Intercept, repeat 1 n times
+    Intercept = rep(1, nrow(pass_data)),
+    
+    # Add our model matrix
+    X = X,
+    
+    # Add spatial effect
+    model_w_index
+    
+  ))
+```
+
+State our model formula.
+
+```{r formula}
+model_formula = as.formula(paste0("y ~ -1 + Intercept ", 
+                                  " + prev_pass + prev_recovery + is_lead + is_deficit",
+                                  " + f(w, model = model_spde, group = w.group, control.group = list(model = 'iid'))"))
+```
+
+
+# Model Results
+
+Run the model
+
+```{r model}
+model = inla(model_formula, 
+             
+             family = "binomial",
+             
+             data = inla.stack.data(model_stack),
+             
+             control.compute = list(dic = TRUE, waic = TRUE, config = TRUE),
+             
+             control.predictor = list(A = inla.stack.A(model_stack)),
+             
+             num.threads = 8
+)
+```
+
+Evaluate our model
+
+```{r viz}
+# Create the spatial maps
+model_map = gg_OZ(model, Mesh, Mat_Name = "w", family = "binomial") +
+  labs(title = paste("Direct Pass ", strength, " INLA Spatial Map", sep = ""))
+
+# Save the spatial maps
+ggsave(filename = paste("Direct Pass ", strength, " INLA Spatial Map.png", sep = ""), 
+       plot = model_map, device = "png", path = here::here("Figures/Pass/"))
+
+# Print a model summary
+summary(model)
+```
+
+Save our results
+
+```{r save}
+# Save the model
+saveRDS(model, file = here::here("Models/Pass/", paste("Direct_Pass", strength, "model.Rda", sep = "_")))
+```
+
+
+

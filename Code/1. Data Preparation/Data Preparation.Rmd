@@ -38,7 +38,7 @@ library(sf) # For spatial data analysis
 
 library(zoo) # For na.locf() function
 
-source(here::here("Code/2. Functions/Plotting Functions.R"))
+source(here::here("Code/0. Functions/Plotting-Functions.R"))
 ```
 
 Load data sets
@@ -143,7 +143,6 @@ otters_data_clean_v5 = otters_data_clean_v4 %>%
 otters_data_clean_v6 = otters_data_clean_v5 %>%
   # Remove binary variables that are no longer needed and minutes & seconds
   select(-faceoff, -icing, -Minutes, -Seconds)
-
 ```
 
 Save this cleaned up data as a csv.
@@ -242,9 +241,11 @@ Below we go through the rigorous process of wrangling our data to fit the Markov
 # Load in entry data
 otters_data_clean_v6 = read_csv(here::here("Data/otters_entry_data.csv"))
 
-## STEP 1: LABEL ALL PUCK RECOVERY AND TAKEAWAY EVENTS AS "RECOVERY" (FOR NOW) ##
+## STEP 1: RELABEL SOME EVENTS (FOR NOW) ##
 otters_data_clean_v7 = otters_data_clean_v6 %>%
-  mutate(Event = ifelse(Event %in% c("Puck Recovery", "Takeaway"), "Recovery", Event))
+  mutate(Event = ifelse(Event %in% c("Puck Recovery", "Takeaway"), "Recovery", Event)) %>%
+  mutate(Event = ifelse(Event == "Play", "Pass", Event)) %>%
+  mutate(Event = ifelse(Event == "Incomplete Play", "Failed Pass", Event))
 
 ## STEP 2: SPLIT SEQUENCES INTO SUBSEQUENCES OF CONSTANT TEAM POSSESSION ##
 otters_data_clean_v8 = otters_data_clean_v7 %>%
@@ -290,7 +291,7 @@ otters_data_clean_v10 = otters_data_clean_v9 %>%
       # Remove all but the first and last play
       future_map(data, ~rbind(head(.x, 1), tail(.x, 1)) %>%
             # Relabel first plays after puck acquisition by defensive team as turnovers
-            mutate(Event = ifelse(Event %in% c("Play", "Incomplete Play", "Recovery"), "Turnover", Event)) %>%
+            mutate(Event = ifelse(Event %in% c("Pass", "Failed Pass", "Recovery"), "Turnover", Event)) %>%
             # Label last events as exits (except last events before the whistle, since those might not be exits)
             mutate(Event = ifelse(last_play == 1 & last_event_b4_faceoff == 0, "Exit", Event))),
     # Isn't on offence and has a single event...
@@ -298,7 +299,7 @@ otters_data_clean_v10 = otters_data_clean_v9 %>%
       # Remove all but the first and last play
       future_map(data, ~.x %>%
             # Relabel first plays after puck acquisition by defensive team as turnovers
-            mutate(Event = ifelse(Event %in% c("Play", "Incomplete Play", "Recovery"), "Turnover", Event)) %>%
+            mutate(Event = ifelse(Event %in% c("Pass", "Failed Pass", "Recovery"), "Turnover", Event)) %>%
             # Label last events as exits (except last events before the whistle, since those might not be exits)
             mutate(Event = ifelse(last_play == 1 & last_event_b4_faceoff == 0, "Exit", Event))),
     # Else, leave it
@@ -319,7 +320,8 @@ otters_data_clean_v10 = otters_data_clean_v9 %>%
 
   
 
-## STEP 5: ADD IN RECOVERIES BETWEEN SHOTS AND TURNOVERS BEFORE EXITS BY DEFENSIVE TEAMS ##
+## STEP 5: ADD IN RECOVERIES BETWEEN SHOT-SHOT EVENTS, RECOVERIES AFTER FAILED PASSES WHERE POSESSION IS MAINTAINED ##
+##         AND TURNOVERS BEFORE EXITS BY DEFENSIVE TEAMS ##
 otters_data_clean_v11 = otters_data_clean_v10 %>%
   # Create a binary variable to identify shot-shot (or shot-goal) plays
   mutate(shot_shot = ifelse((Event == "Shot") & (lag(Event) %in% c("Shot", "Goal")), 1, 0)) %>%
@@ -333,6 +335,12 @@ otters_data_clean_v11 = otters_data_clean_v10 %>%
   ungroup() %>%
   # Label every new row as a recovery
   mutate(Event = ifelse(Event %in% NA, "Recovery", Event)) %>%
+  # Repeat the same process with recoveries after failed passes
+  mutate(fpass = ifelse((Event %in% c("Turnover", "Exit", "Zone Entry")) & (lag(Event) == "Failed Pass"), 1, 0)) %>%
+  mutate(temp_id = cumsum(fpass)) %>%
+  group_by(temp_id) %>%
+  do(rbind(., c(.$id, rep(NA, NCOL(.) - 1)))) %>%
+  ungroup() %>%
   # Repeat the same process with turnovers between offensive team possession and defensive team exits
   mutate(nonto_exit = ifelse((Event == "Exit") & (lag(Event) != "Turnover"), 1, 0)) %>%
   mutate(temp_id = cumsum(nonto_exit)) %>%
@@ -340,7 +348,7 @@ otters_data_clean_v11 = otters_data_clean_v10 %>%
   do(rbind(., c(.$id, rep(NA, NCOL(.) - 1)))) %>%
   ungroup() %>%
   # Repeat same process for turnover (def possession) to pass (off possession)
-  mutate(to_pass = ifelse((Event %in% c("Play", "Incomplete Play")) & (lag(Event) == "Turnover"), 1, 0)) %>%
+  mutate(to_pass = ifelse((Event %in% c("Pass", "Failed Pass")) & (lag(Event) == "Turnover"), 1, 0)) %>%
   mutate(temp_id = cumsum(to_pass)) %>%
   group_by(temp_id) %>%
   do(rbind(., c(.$id, rep(NA, NCOL(.) - 1)))) %>%
@@ -356,18 +364,28 @@ otters_data_clean_v11a = otters_data_clean_v10 %>%
   do(rbind(., c(.$id, rep(NA, NCOL(.) - 1)))) %>%
   ungroup() %>%
   mutate(Event = ifelse(Event %in% NA, "Recovery", Event)) %>%
+  mutate(fpass = ifelse((Event %in% c("Turnover", "Exit", "Zone Entry")) & (lag(Event) == "Failed Pass"), 1, 0)) %>%
+  mutate(temp_id = cumsum(fpass)) %>%
+  group_by(temp_id) %>%
+  do(rbind(., c(.$id, rep(NA, NCOL(.) - 1)))) %>%
+  ungroup() %>%
+  mutate(Event = ifelse(Event %in% NA, "Recovery", Event)) %>%
   mutate(nonto_exit = ifelse((Event == "Exit") & (lag(Event) != "Turnover"), 1, 0)) %>%
   mutate(temp_id = cumsum(nonto_exit)) %>%
   group_by(temp_id) %>%
   do(rbind(., c(.$id, rep(NA, NCOL(.) - 1)))) %>%
   ungroup() %>%
   mutate(Event = ifelse(Event %in% NA, "Turnover", Event)) %>%
-  mutate(to_pass = ifelse((Event %in% c("Play", "Incomplete Play")) & (lag(Event) == "Turnover"), 1, 0)) %>%
+  mutate(to_pass = ifelse((Event %in% c("Pass", "Failed Pass")) & (lag(Event) == "Turnover"), 1, 0)) %>%
   mutate(temp_id = cumsum(to_pass)) %>%
   group_by(temp_id) %>%
   do(rbind(., c(.$id, rep(NA, NCOL(.) - 1)))) %>%
   ungroup() %>%
   mutate(Event = ifelse(Event %in% NA, "Recovery", Event))
+
+# Remove a few NA columns that arise
+otters_data_clean_v11 = otters_data_clean_v11[1:36650,]
+otters_data_clean_v11a = otters_data_clean_v11a[1:36650,]
 
 # For columns that we don't want to fill in with the following row's data, use otters_data_clean_v11a
 otters_data_clean_v11$Event = otters_data_clean_v11a$Event
@@ -432,11 +450,11 @@ otters_data_clean_v14 = otters_data_clean_v13 %>%
   # so it counts towards the previous sequence. These coincidentally align with shots as the prev_event
   filter(!(event == "Dump In/Out" & prev_event == "Shot")) %>%
   # Convert mid-sequence dump-ins to passes
-  mutate(event = ifelse(event == "Dump In/Out" & prev_event != "Zone Entry" & detail_1 == "Retained", "Play", event)) %>%
-  mutate(event = ifelse(event == "Dump In/Out" & prev_event != "Zone Entry" & detail_1 == "Lost", "Incomplete Play", event)) %>%
-  mutate(detail_1 = ifelse(event %in% c("Play", "Incomplete Play") & detail_1 %in% c("Retained", "Lost"), "Indirect", detail_1)) %>%
+  mutate(event = ifelse(event == "Dump In/Out" & prev_event != "Zone Entry" & detail_1 == "Retained", "Pass", event)) %>%
+  mutate(event = ifelse(event == "Dump In/Out" & prev_event != "Zone Entry" & detail_1 == "Lost", "Failed Pass", event)) %>%
+  mutate(detail_1 = ifelse(event %in% c("Pass", "Failed Pass") & detail_1 %in% c("Retained", "Lost"), "Indirect", detail_1)) %>%
   # Remove recoveries after a possession play
-  filter(!(event == "Recovery" & prev_event %in% c("Play", "Incomplete Play", "Recovery"))) %>%
+  filter(!(event == "Recovery" & prev_event %in% c("Pass", "Recovery"))) %>%
   # Remove recoveries after non-dumped zone entries
   filter(!(event == "Recovery" & prev_event == "Zone Entry" & lag(detail_1 %in% c("Carried", "Played")))) %>%
   # Combine controlled zone entry then dump in to dumped zone entry
@@ -448,7 +466,7 @@ otters_data_clean_v14 = otters_data_clean_v13 %>%
   # Recalculate prev_event and next_event
   group_by(entry_id) %>%
   nest() %>%
-  mutate(data = map(data, ~.x %>% mutate(prev_event = lag(event), next_event = lead(event)))) %>%
+  mutate(data = future_map(data, ~.x %>% mutate(prev_event = lag(event), next_event = lead(event)))) %>%
   unnest() %>%
   # Turn next_event into Whistle for frozen shots
   mutate(next_event = ifelse(event == "Shot" & last_event_b4_faceoff == 1, "Whistle", next_event)) %>%
@@ -460,7 +478,7 @@ otters_data_clean_v14 = otters_data_clean_v13 %>%
   group_by(entry_id) %>%
   nest() %>%
   # Get number of events in each sequence
-  mutate(len = map(data, ~nrow(.x)) %>% as.numeric()) %>%
+  mutate(len = future_map(data, ~nrow(.x)) %>% as.numeric()) %>%
   # Remove sequences of length 1
   filter(len > 1) %>%
   select(-len) %>%
@@ -494,17 +512,17 @@ otters_data_clean_v15 = otters_data_clean_v14 %>%
   # Remove SH plays
   filter(entry_strength != "SH") %>%
   # Identify if the previous event was a pass
-  mutate(is_prev_event_pass = ifelse(event %in% c("Shot", "Goal") & prev_event %in% c("Play", "Incomplete Play"), 1, 0)) %>%
+  mutate(is_prev_event_pass = ifelse(event %in% c("Shot", "Goal") & prev_event %in% c("Pass", "Failed Pass"), 1, 0)) %>%
   # Determine where the pass location and time was if the last event was a pass
   mutate(last_pass_x = ifelse(is_prev_event_pass == 1, lag(same_direction_x), NA),
          last_pass_y = ifelse(is_prev_event_pass == 1, lag(same_direction_y), NA),
-         last_pass_time = ifelse(is_prev_event_pass == 1, c_seconds - lag(c_seconds), NA)) %>%
+         time_since_last_pass = ifelse(is_prev_event_pass == 1, c_seconds - lag(c_seconds), NA)) %>%
   # Fix what appears to be a data entry error (entry at x = 28)
   mutate(same_direction_x = ifelse(same_direction_x == 28 & event == "Zone Entry", 128, same_direction_x)) %>%
   # Remove shots from behind the net (we assume that cannot happen in our model)
   filter(!(event %in% c("Shot", "Goal") & same_direction_x > 189)) %>%
   # If we converted a dump-in event to a pass (ie it occurred >25 feet into the zone), then we relabel the preceding entry as a carried entry
-  mutate(detail_1 = ifelse(detail_1 == "Dumped" & next_event %in% c("Incomplete Play", "Play"), "Carried", detail_1)) %>%
+  mutate(detail_1 = ifelse(detail_1 == "Dumped" & next_event %in% c("Failed Pass", "Pass"), "Carried", detail_1)) %>%
   # Add in score effect
   mutate(score_effect = case_when(
     (period %in% c(1,2)) & (offensive_score_diff >= 2) ~ "Lead",
@@ -519,17 +537,17 @@ Here we perform add in a few extra variables and clean up some details to prepar
 
 ```{r simulations}
 ## STEP 1: ASSIGN TURNOVERS TO THE PLAYER THAT TURNS THE PUCK OVER ##
-otters_data_clean_v16 = otters_data %>%
+otters_data_clean_v16 = otters_data_clean_v15 %>%
   # Turnovers are assigned to the last (known) player who had the puck
   mutate(Player = ifelse(event == "Turnover", lag(Player), Player)) %>%
   # Make sure that this is Player_2 for complete passes
-  mutate(Player = ifelse(event == "Turnover" & prev_event == "Play", lag(Player_2), Player))
+  mutate(Player = ifelse(event == "Turnover" & prev_event == "Pass", lag(Player_2), Player))
 
 
 ## STEP 2: DETERMINE WHICH EVENTS ARE ASSIGNED TO OTTERS ##
 
 # Get a list of all Otters in the data
-otters_players = otters_data %>%
+otters_players = otters_data_clean_v16 %>%
   filter(poss_team == "Erie Otters") %>%
   select(Player) %>%
   unique() %>%
@@ -543,11 +561,10 @@ otters_data_clean_v17 = otters_data_clean_v16 %>%
 ## STEP 3: ADD IN PASS COUNTS ##
 
 # Create an event ID
-otters_data_clean_v17
-  mutate(event_id = 1:nrow(.))
+otters_data_clean_v18 = otters_data_clean_v17 %>% mutate(event_id = 1:nrow(.))
 
 # Get pass counts
-pass_data = otters_data_clean_v17 %>%
+pass_data = otters_data_clean_v18 %>%
   select(event_id, entry_id, event, prev_event) %>%
   # Nest by entry-to-exit sequence
   group_by(entry_id) %>%
@@ -555,7 +572,7 @@ pass_data = otters_data_clean_v17 %>%
   # For each entry-to-exit sequence...
   mutate(data = map(data, ~.x %>% 
                       # Create a pass sequence ID to identify plays with consecutive passes
-                      mutate(num = ifelse(!(event %in% c("Play", "Incomplete Play")) & prev_event %in% c("Play", "Incomplete Play"), 1, 0)) %>%
+                      mutate(num = ifelse(!(event %in% c("Pass", "Failed Pass")) & prev_event %in% c("Pass", "Failed Pass"), 1, 0)) %>%
                       mutate(pass_seq_id = cumsum(num)))) %>%
   # Unnest
   unnest() %>%
@@ -565,7 +582,7 @@ pass_data = otters_data_clean_v17 %>%
   # For each pass subsequence...
   mutate(data = map(data, ~.x %>% 
                       # Remove non-passes
-                      filter(event %in% c("Play", "Incomplete Play")) %>%
+                      filter(event %in% c("Pass", "Failed Pass")) %>%
                       # Create a variable that records the cumulative number of passes in a subsequence
                       mutate(num2 = 1) %>%
                       mutate(pass_count = cumsum(num2)))) %>%
@@ -575,14 +592,14 @@ pass_data = otters_data_clean_v17 %>%
   mutate(pass_count = ifelse(pass_count >= 4, 4, pass_count))
 
 # Merge the pass counts into the main data frame
-otters_data_clean_v18 = otters_data_clean_v17 %>%
+otters_data_clean_v19 = otters_data_clean_v18 %>%
   merge(pass_data, on = c("event_id"), all.x = TRUE) %>%
   mutate(pass_count = ifelse(pass_count %in% NA, 0, pass_count)) %>%
   arrange(event_id)
 
 
 ## STEP 4: ADD IN SHOT COUNTS AND TIME SINCE LAST SHOT ##
-otters_data_clean_v19 = otters_data_clean_v18 %>%
+otters_data_clean_v20 = otters_data_clean_v19 %>%
   # Nest by entry-to-exit sequence
   group_by(entry_id) %>%
   nest() %>%
@@ -614,17 +631,53 @@ otters_data_clean_v19 = otters_data_clean_v18 %>%
   mutate(time_since_last_shot = ifelse(shot_count > 1 & event == "Shot", seconds - lag(s_sec), time_since_last_shot))
 
 
+## STEP 5: CREATE TIME-DECAYING VARIABLES FOR TIME SINCE LAST SHOT/PASS/ENTRY ##
+otters_data_clean_v21 = otters_data_clean_v20 %>%
+  # Create a decaying time function for time since the entry
+  mutate(entry_time_decay = case_when(
+    # 0 seconds since entry --> 1
+    time_since_entry == 0 ~ 1,
+    # 1-9 seconds since entry --> 1 - log10(seconds)
+    time_since_entry < 10 ~ 1 - log10(time_since_entry),
+    # 10+ seconds since entry --> 0
+    time_since_entry >= 10 ~ 0,
+    TRUE ~ 0
+  )) %>%
+  # Create a decaying time function for time since the last shot
+  mutate(shot_time_decay = case_when(
+    # 0 seconds since last shot --> 1
+    time_since_last_shot == 0 ~ 1,
+    # 1-9 seconds since last shot --> 1 - log10(seconds)
+    time_since_last_shot < 10 ~ 1 - log10(time_since_last_shot),
+    # 10+ seconds since last shot --> 0
+    time_since_last_shot >= 10 ~ 0,
+    TRUE ~ 0
+  )) %>%
+  # Create a decaying time function for time since the last pass
+  mutate(pass_time_decay = case_when(
+    # 0 seconds since last pass --> 1
+    time_since_last_pass == 0 ~ 1,
+    # 1-9 seconds since last pass --> 1 - log10(seconds)
+    time_since_last_pass < 10 ~ 1 - log10(time_since_last_pass),
+    # 10+ seconds since last pass --> 0
+    time_since_last_pass >= 10 ~ 0,
+    TRUE ~ 0
+  ))
+  
+
 ## STEP 5: FINAL TOUCH UPS ##
-otters_data_clean_v20 = otters_data_clean_v19 %>%
+otters_data_clean_v22 = otters_data_clean_v21 %>%
   # Remove useless variables
   select(-s_sec, -num, -num2, -dummy, -pass_seq_id) %>%
   # Add in a zone entry indicator
-  mutate(before_entry_indicator = ifelse(event == "Zone Entry", 1, 0))
+  mutate(before_entry_indicator = ifelse(event == "Zone Entry", 1, 0)) %>%
+  # Organize column order
+  select(game_id, episode_id, entry_id, event_id, event, prev_event, next_event, everything(), shot_count)
 ```
 
 
 Save the final data used in our models as a csv.
 
 ```{r save3}
-write.csv(otters_data_clean_v20, here::here("Data/otters_data_for_modelling.csv"), row.names = FALSE)
+write.csv(otters_data_clean_v22, here::here("Data/otters_data_for_modelling.csv"), row.names = FALSE)
 ```

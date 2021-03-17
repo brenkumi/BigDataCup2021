@@ -12,15 +12,17 @@ Contains a pdf with our submission for the 2021 Big Data Cup.
 
 Our code for this project is broken down into the following sub-folders:
 
+0. **Functions**: Contains plotting functions used to create INLA spatial maps and rink plots as well as sampling functions used in our simulations.
+
 1. **Data Preparation**: All data preparation required to extract entry-to-exit sequences and reformat data to fit the Markov decision process as described in our paper.
 
-2. **Functions**: Contains plotting functions used to create INLA spatial maps and rink plots as well as sampling functions used in our simulations.
+2. **Action-Transition Models**: The spatiotemporal poisson and logistic models that were used to estimate the transition probabilities of our Markov decision process.
 
-3. **Core Transition Models**: The spatiotemporal poisson and logistic models that were used to estimate the transition probabilities of our Markov decision process.
+3. **Movement and Time Models**: Additional models required to make our simulation run smoothly such as predicting whether or not there is traffic on a shot, predicting the subsequent xy-location following an event, predicting whether an entry will be controlled or dumped, etc.
 
-4. **Glue Transition Models**: Additional models required to make our simulation run smoothly such as predicting whether or not there is traffic on a shot, predicting the subsequent xy-location following an event, predicting whether an entry will be controlled or dumped, etc.
+4. **Value Models**: The expected goals models (with and without pre-shot passes).
 
-5. **Simulations**: Contains the simulation chain used to get expected possession value samples from our model.
+5. **Simulations**: Contains the generation of sample parameters to be used in our simulations and the simulation chain itself used to get expected possession value samples from our model.
 
 
 
@@ -37,4 +39,4 @@ The figures folder contains pngs of various spatial maps from our core and glue 
 
 ### Models
 
-Due to file size constraints, we could not include any of our models in this repository. However, the code for our models is available in "Code/3. Core Transition Models" and "Code/4. Glue Transition Models".
+Due to file size constraints, we could not include any of our models in this repository. However, the code for our models is available in "Code/2. Action-Transition Models", "Code/3. Movement and Time Models" and "Code/4. Value Models".

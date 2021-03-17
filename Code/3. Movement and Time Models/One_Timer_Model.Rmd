@@ -1,0 +1,281 @@
+---
+output: pdf_document
+---
+
+\centering
+\Huge
+
+**INLA SPDE Model - One-Timer Probability Model with AR(1) Process for Time Since Last Pass**
+
+\raggedright
+
+\rule{\textwidth}{1.5pt}
+\small
+
+```{r setup, include = FALSE}
+library(knitr) # For formatting the document
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+```
+
+Summary: This file provides a template for building our spatiotemporal logistic regression model with INLA used in the simulations of our model. Here we are predicting the probability that a given shot is a one-timer.
+
+
+# Load data and packages
+
+Load necessary packages
+
+```{r load packages}
+library(tidyverse) # For various data analysis functions
+
+library(here) # To call or save code/data in certain folders
+
+library(INLA) # To fit model with INLA
+
+source(here::here("Code/0. Functions/Plotting-Functions.R")) # For ggField2 function
+```
+
+Load data set
+
+```{r load data}
+otters_data = read_csv(here::here("Data/otters_data_for_modelling.csv"))
+```
+
+# Specify Strength State
+
+Specify which strength state we wish to run the model in
+
+```{r parameters}
+strength = "ES" # "PP" or "ES"
+```
+
+
+# Data Preparation
+
+Filter down to the data we wish to build the model with (shots that are preceded by a pass).
+
+```{r data prep}
+# Trim to our desired events (shots)
+shot_data = otters_data %>%
+  # Filter for shots
+  filter(event %in% c("Shot", "Goal")) %>%
+  # Filter for specified strength state
+  filter(entry_strength == strength) %>%
+  # Filter for shots that are preceded by a pass
+  filter(is_prev_event_pass == 1) %>%
+  # Convert logical variables to 0-1 binaries
+  mutate(detail_3 = as.numeric(detail_3), 
+         detail_4 = as.numeric(detail_4))
+```
+
+
+# Create Meshes
+
+Build the spatial shot mesh.
+
+```{r shot mesh}
+# Create a coordinate matrix
+locations = shot_data %>% 
+  select(same_direction_x, same_direction_y) %>%
+  mutate_all(as.numeric) %>%
+  as.matrix()
+
+# Set the boundary for the mesh
+xvals = locations[,1]
+yvals = locations[,2]
+
+xrange = c(min(xvals), 189)
+yrange = c(min(yvals), 85)
+
+model_domain <- matrix(c(xrange[1], yrange[1],
+                         xrange[2], yrange[1],
+                         xrange[2], yrange[2],
+                         xrange[1], yrange[2],
+                         xrange[1], yrange[1]),
+                       ncol = 2L, byrow = TRUE)
+
+
+# Create the mesh
+Mesh = inla.mesh.2d(locations, loc.domain = model_domain, max.edge = c(20, 15), offset = c(1, 2), cutoff = 8)
+
+
+# Plot the mesh and data points
+plot(Mesh)
+points(locations, col = "blue", pch = 4)
+
+# Save the mesh
+saveRDS(Mesh, here::here(paste("Models/Meshes/One_Timer", strength, "Shot_Mesh.Rda", sep = "_")))
+```
+
+Build the spatial pass mesh.
+
+```{r pass mesh}
+# Create a coordinate matrix
+pass_loc = shot_data %>% 
+  select(last_pass_x, last_pass_y) %>%
+  mutate_all(as.numeric) %>%
+  as.matrix()
+
+# Set the boundary for the mesh
+pass_x = pass_loc[,1]
+pass_y = pass_loc[,2]
+
+pass_xrange = c(min(pass_x), 200)
+pass_yrange = c(min(pass_y), 85)
+
+pass_domain <- matrix(c(pass_xrange[1], pass_yrange[1],
+                        pass_xrange[2], pass_yrange[1],
+                        pass_xrange[2], pass_yrange[2],
+                        pass_xrange[1], pass_yrange[2],
+                        pass_xrange[1], pass_yrange[1]),
+                      ncol = 2L, byrow = TRUE)
+
+# Create the mesh
+pass_Mesh = inla.mesh.2d(pass_loc, loc.domain = pass_domain, max.edge = c(20, 15), offset = c(1, 2), cutoff = 8)
+
+# Plot the mesh
+plot(pass_Mesh)
+points(pass_loc, col = "red", pch = 4)
+
+saveRDS(pass_Mesh, here::here(paste("Models/Meshes/One_Timer", strength, "Pass_Mesh.Rda", sep = "_")))
+```
+
+Build the temporal meshes. We create two here, one for shots built with random knots and one for passes with knots at 0, 1, 2, max seconds after the pass. We use random knots for shots since we did not want a temporal effect for it, but INLA must have a corresponding number of knots for all spatial effects.
+
+```{r time mesh}
+# Set the knots
+knots = c(0, 1, 2, max(shot_data$time_since_last_pass))
+
+knots_random = c(14, 27, 33, 58)
+
+# Create 1D meshes
+time_Mesh <- inla.mesh.1d(loc = knots)
+
+random_Mesh = inla.mesh.1d(loc = knots_random)
+
+# Save the meshes
+saveRDS(time_Mesh, here::here(paste("Models/Meshes/One_Timer", strength, "Time_Mesh.Rda", sep = "_")))
+
+saveRDS(random_Mesh, here::here(paste("Models/Meshes/One_Timer", strength, "Time_Mesh_Random.Rda", sep = "_")))
+```
+
+# Model Specifications
+
+Set a prior and create a weight matrix and index for the shot spatial effect in our model.
+
+```{r spatial shot}
+# Create a spatial weight matrix for shot locations
+model_A_matrix = inla.spde.make.A(Mesh, loc = locations, n.group = length(knots_random), group = shot_data$time_since_entry, group.mesh = random_Mesh)
+
+# Set the PC Matern prior
+model_spde = inla.spde2.pcmatern(mesh = Mesh, prior.range = c(30, 0.8), prior.sigma = c(0.5, 0.5))
+
+# Create shot spatial weight index
+model_w_index = inla.spde.make.index("w", n.spde = model_spde$n.spde, n.group = length(knots_random))
+```
+
+Set a prior and create a weight matrix and index for the pass spatial effect in our model.
+
+```{r spatial pass}
+# Create a spatial weight matrix for pass locations
+pass_A_matrix = inla.spde.make.A(pass_Mesh, loc = pass_loc, n.group = length(knots), group = shot_data$time_since_last_pass, group.mesh = time_Mesh)
+
+# Set the PC Matern prior
+pass_spde = inla.spde2.pcmatern(mesh = pass_Mesh, prior.range = c(30, 0.8), prior.sigma = c(0.5, 0.5))
+
+# Create pass spatial weight index
+pass_w_index = inla.spde.make.index("g", n.spde = pass_spde$n.spde, n.group = length(knots))
+```
+
+Create a stack of all information to include in the model.
+
+```{r stack}
+# Initialize the stack
+model_stack = inla.stack(
+  
+  # Add our response variable
+  data = list(y = shot_data$detail_4), 
+  
+  # Add a list of the weights on the effects
+  A = list(1, 1, pass_A_matrix, model_A_matrix),
+  
+  # Add spatial effects
+  effects = list(
+    
+    # Intercept, repeat 1 n times
+    Intercept = rep(1, nrow(shot_data)),
+    
+    # Add our model matrix (just use traffic as the only covariate)
+    X = shot_data %>% select(detail_3),
+    
+    # Add pass spatial effect
+    pass_w_index,
+    
+    # Add shot spatial effect
+    model_w_index
+    
+  ))
+```
+
+State our model formula.
+
+```{r formula}
+model_formula = as.formula(paste0("y ~ -1 + Intercept ", 
+                                  " + detail_3",
+                                  " + f(w, model = model_spde, group = w.group, control.group = list(model = 'ar1'))",
+                                  " + f(g, model = pass_spde, group = g.group, control.group = list(model = 'ar1'))"))
+```
+
+
+# Model Results
+
+Run the model
+
+```{r model}
+model = inla(model_formula,
+             
+             family = "binomial",
+             
+             data = inla.stack.data(model_stack),
+             
+             control.compute = list(dic = TRUE, waic = TRUE, config = TRUE),
+             
+             control.predictor = list(A = inla.stack.A(model_stack)),
+             
+             num.threads = 8
+)
+```
+
+Evaluate the model
+
+```{r viz}
+# Create the spatial maps
+model_map_shot = gg_OZ(model, Mesh, Mat_Name = "w", Groups = 4, family = "binomial",
+                  GroupLabels = c("14 Seconds Since Entry", "27 Seconds Since Entry", 
+                                  "33 Seconds Since Entry", "58 Seconds Since Entry")) +
+  labs(title = paste("Probability a Shot with a Pre-Shot Pass is a One-Timer ", strength, " AR(1) INLA Spatial Map", sep = ""))
+
+model_map_pass = gg_OZ(model, pass_Mesh, Mat_Name = "g", Groups = 4, family = "binomial",
+                       GroupLabels = c("0 Seconds Before Shot", "1 Second Before Shot", 
+                                       "2 Seconds Before Shot", ">2 Seconds Before Shot")) +
+  labs(title = paste("Pass Before One-Timer ", strength, " AR(1) INLA Spatial Map", sep = ""))
+
+# Save the spatial maps
+ggsave(filename = paste("One-Timer ", strength, " AR(1) INLA Spatial Map.png", sep = ""), 
+       plot = model_map_shot, device = "png", path = here::here("Figures/Other/"))
+
+ggsave(filename = paste("Pass Before One-Timer ", strength, " AR(1) INLA Spatial Map.png", sep = ""), 
+       plot = model_map_pass, device = "png", path = here::here("Figures/Other/"))
+
+# Print a model summary
+summary(model)
+```
+
+Save our results
+
+```{r save}
+saveRDS(model, here::here(paste("Models/Other/One_Timer", strength, "model.Rda", sep = "_")))
+```
+
+
+
